@@ -1,0 +1,13 @@
+{
+  "id": "custom-phone-dark",
+  "name": "深灰",
+  "mode": "phone",
+  "tokens": {
+    "background": "#222220",
+    "color": "#ECE9E2",
+    "bubble": "#333330",
+    "ownBubble": "#484843",
+    "fontSize": "15px",
+    "lineHeight": "1.65"
+  }
+}

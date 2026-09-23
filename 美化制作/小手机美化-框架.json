@@ -1,0 +1,15 @@
+{
+  "id": "custom-phone-starter",
+  "name": "小手机框架 · 灰白",
+  "mode": "phone",
+  "tokens": {
+    "background": "#F3F2EE",
+    "color": "#292A27",
+    "fontFamily": "'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif",
+    "fontSize": "15px",
+    "lineHeight": "1.65",
+    "bubble": "#FFFFFF",
+    "ownBubble": "#DDE3D8"
+  },
+  "css": ".phone { --avatar-size: 32px; --message-gap: 8px; background: #D5D6D1; border-color: #ACAEA6; box-shadow: inset 0 0 0 3px #ffffff80, 0 8px 22px #00000010; } .phone .message-avatar { border-radius: 50%; border: 1px solid #292a271a; } .phone .phone-header { font-family: inherit; border-bottom-color: #292a271f; } .phone .bubble { font-size: 14px; line-height: 1.7; } .phone .message[data-type=text] .bubble { border-radius: 12px 12px 12px 4px; } .phone .message.own[data-type=text] .bubble { border-radius: 12px 12px 4px 12px; } .phone .message-time { color: #6F736A; opacity: 1; } .phone .transfer-card { background: #B97842; color: #FFFFFF; } .phone .messages { scrollbar-color: #A5AA9D transparent; } .phone .messages::-webkit-scrollbar-thumb { background: #A5AA9D; border-radius: 8px; }"
+}
