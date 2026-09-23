@@ -1,4 +1,5 @@
 import { compileThemeCss, parseThemeCss } from './theme-css.js';
+import { createId } from './id.js';
 
 import { BUILTIN_THEMES, THEME_ALIASES, RETIRED_THEME_IDS } from './builtin-themes.js';
 import { LEGACY_THEMES } from './legacy-themes.js';
@@ -18,7 +19,7 @@ export function validateTheme(raw, { allowBuiltInId = false } = {}) {
   }
   const css = raw.css ?? '';
   compileThemeCss(css, tokens.fontFamily);
-  return { id: typeof raw.id === 'string' && (/^custom-[a-z0-9-]{1,80}$/.test(raw.id) || allowBuiltInId && [...BUILTIN_THEMES, ...LEGACY_THEMES].some(t => t.id === raw.id && t.mode === raw.mode)) ? raw.id : `custom-${crypto.randomUUID()}`,
+  return { id: typeof raw.id === 'string' && (/^custom-[a-z0-9-]{1,80}$/.test(raw.id) || allowBuiltInId && [...BUILTIN_THEMES, ...LEGACY_THEMES].some(t => t.id === raw.id && t.mode === raw.mode)) ? raw.id : `custom-${createId()}`,
     name: raw.name.trim().slice(0, 60), mode: raw.mode, tokens, css };
 }
 export function resolveTheme(state, mode, themeId) {

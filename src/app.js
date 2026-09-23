@@ -546,7 +546,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       el('section', { class: 'settings-group' }, el('h2', {}, '数据'), el('p', { class: 'muted' }, '番外保存在当前浏览器、当前酒馆账号的独立资料库。更新扩展代码不会覆盖资料；跨设备请使用备份恢复。'),
         el('div', { class: 'actions' }, button('按分类导出 ZIP', exportCategories), button('备份全部资料', () => download(backup(state), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         ),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.0 正式版：四款正文、四款小手机主题；正文／小手机／HTML 独立生成、分类收藏、备份导出。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.1：修复普通 HTTP 访问云端酒馆时的初始化失败，兼容作品及主题编号生成。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {

@@ -1,10 +1,12 @@
 import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, BUILTIN_THEMES, THEME_ALIASES, RETIRED_THEME_IDS } from './themes.js';
 
-export const VERSION = '1.0.0';
+import { createId } from './id.js';
+
+export const VERSION = '1.0.1';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
-export const id = () => crypto.randomUUID();
+export const id = createId;
 export const clone = value => structuredClone(value);
 export const text = (value, max = 1000000) => typeof value === 'string' ? value.slice(0, max) : '';
 export const unique = values => [...new Set(values)];
