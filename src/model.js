@@ -2,7 +2,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.3';
+export const VERSION = '1.0.4';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -45,7 +45,7 @@ export function removeCategory(state, categoryId) {
 }
 export function filterStories(state, { category = 'all', tag = '', query = '' } = {}) {
   const needle = query.trim().toLocaleLowerCase();
-  return state.stories.filter(s => s.saved || s.chapters.length > 0)
+  return state.stories.filter(s => s.saved)
     .filter(s => category === 'all' || (category === 'uncategorized' ? s.categoryIds.length === 0 : s.categoryIds.includes(category)))
     .filter(s => !tag || s.tags.includes(tag))
     .filter(s => !needle || `${s.title}\n${s.prompt}\n${s.tags.join(' ')}`.toLocaleLowerCase().includes(needle))

@@ -127,6 +127,7 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
   messages.push({ role: 'user', content: mode === 'html' ? format : chapters.length
     ? `根据以上番外续写第 ${chapters.length + 1} 节，不重复上文。本节${target}。${continuation ? `本次要求：${continuation}` : '请自然接续。'}\n${format}`
     : `现在生成第一节，${target}。\n${format}` });
+  if (!chapters.length) messages.at(-1).content += '\n必须根据故事内容拟定一个独立标题，语气随番外氛围变化：喜剧可跳脱，酸涩或严肃故事用克制的标题。不得把用户指令当标题。' + (mode === 'html' ? '标题放在完整 HTML 的 <title> 中。' : mode === 'phone' ? '在 JSON 顶层添加 title 字符串，messages 结构不变。' : '首行严格写 <shunxi-title>你的标题</shunxi-title>，换行后开始正文，正文不重复标题；标题不计入目标字数。');
   const chars = messages.reduce((n, m) => n + m.content.length, 0);
   if (chars > maxInputChars) throw new Error(`本次输入约 ${chars} 字符，超过设置的 ${maxInputChars} 字符上限。`);
   Object.defineProperty(messages, 'warnings', { value: [...macros.warnings] });

@@ -50,3 +50,4 @@ button:hover{background:transparent}.primary:hover{background:var(--ink);opacity
 
 /* 1.0.2 */
 .launcher{width:32px;height:32px;padding:2.667px}.launcher .mark{width:26.667px}.launcher[hidden]{display:none!important}.generation-error{border:1px solid var(--line);padding:14px;margin:14px 0}.generation-error p,.generation-notes p{overflow-wrap:anywhere;font-size:13px}.generation-notes{margin:12px 0;font-size:13px}.model-fetch{display:flex;flex-direction:column;align-items:flex-start;gap:10px;justify-content:center}.model-status{overflow-wrap:anywhere}
+.source-detail-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px}.source-detail-toolbar button{white-space:nowrap;flex-shrink:0}
