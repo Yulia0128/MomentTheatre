@@ -2,7 +2,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.2';
+export const VERSION = '1.0.3';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;

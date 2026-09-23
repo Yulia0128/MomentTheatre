@@ -56,10 +56,10 @@
 - 基础人物字段和 `{{char}}`、`{{user}}`、`{{description}}`、`{{personality}}`、`{{scenario}}`、`{{persona}}`、`{{mesExamples}}` 等基础替换。
 - 世界书常驻、主关键词、四种次关键词组合、大小写／完整单词匹配、关键词正则。
 - 世界书角色前／角色后／聊天深度位置和基础角色类型；按条目顺序排列。
-- Chat Completion 预设的顺序提示词与人物、世界书、聊天历史标记。
+- Chat Completion 预设的顺序提示词与人物、世界书、聊天历史标记；新生成／续写触发条件，以及相对番外前文的深度注入。
 - 预设的 temperature、top_p、frequency_penalty、presence_penalty；输出上限由瞬息设置覆盖。
 
-不支持完整递归、概率触发、sticky/cooldown/delay、分组竞争、向量检索、脚本宏、正文变量、预设条件和深度注入，也不复刻酒馆的 token 预算、示例对话转换和供应商工具调用配置。已识别的不兼容规则会提示；不应把复杂动态角色卡当作已兼容。
+支持世界书概率与生成类型筛选；复杂递归、sticky/cooldown/delay、分组竞争、向量检索和单条扫描深度采用独立番外的常驻／关键词匹配，并在资料处理说明中列出差异，不再直接阻断生成。作者注释位置映射到番外前文深度，扩展插槽映射到角色后资料。未实现完整脚本运行、正文变量继承、酒馆 token 预算、示例对话转换和供应商工具调用配置，不应把复杂动态角色卡当作完整兼容。
 
 **源码接口核对与模拟请求测试不等同于实机验收。** 官方接口后续版本、第三方分支、特殊供应商响应都需在真实环境验证。
 
@@ -73,7 +73,17 @@
 ## 1.0.2 原生接口核对（2026-09-23）
 
 - `isGenerating()`：SillyTavern core 1.18.0 `public/script.js` 导出，返回发送中／群聊生成状态。通过扩展入口相对路径加载核心模块；`GENERATION_STARTED(type, options, dryRun)` 在试算也触发，现忽略第三参数为真的事件。源码置信度高；本地模拟宿主验证不替代用户云端实机验证。
-- `#extensions_settings`：1.18.0 `public/index.html` 原生扩展设置容器；使用独立 details 入口，复用宿主基础样式，不依赖酒馆助手。
+- `#extensions_settings`：1.18.0 `public/index.html` 原生扩展设置容器；1.0.3 起改用原生 inline-drawer 结构与宿主箭头，不依赖酒馆助手。
 - `POST /api/backends/chat-completions/status`：1.18.0 `src/endpoints/backends/chat-completions.js`，custom_url 指定独立连接；custom_include_headers 显式传递独立 Authorization，secret_id 不引用主密钥，返回 data 数组中的 id 为模型。失败时酒馆可能不透传服务商原始状态，界面不虚构状态码。
-- 宏语法依据 1.18.0 `public/scripts/macros.js` 和 `variables.js`。独立 Map 仅实现当前支持的取值／赋值格式，不调用正文变量接口。不支持的宏或 EJS 按原文交给模型并显示说明，不声称执行其动态逻辑；高级世界书触发和预设深度条件限制仍适用。
+- 宏语法依据 1.18.0 `public/scripts/macros.js` 和 `variables.js`。独立 Map 仅实现当前支持的取值／赋值格式，不调用正文变量接口。不支持的宏或 EJS 按原文交给模型并显示说明，不声称执行其动态逻辑。1.0.3 的深度和条件处理见下。
 - 数据：IndexedDB 完整资料库 + localStorage 即时输入恢复记录，按原 scope 隔离，带 revision/writer/sequence 防止旧保存覆盖较新的输入。API 密钥另存浏览器账号命名空间，不进入状态备份。
+
+## 1.0.3 提示词与原生抽屉核对（2026-09-24）
+
+| symbol | surface / applies_to | provenance | confidence / runtime_check |
+| --- | --- | --- | --- |
+| inline-drawer / inline-drawer-toggle / inline-drawer-content、fa-circle-chevron-down | SillyTavern core 1.18.0 | [index.html](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/index.html)、[script.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/script.js) 的 delegated click handler | high / 使用宿主原生展开事件与样式；本地浏览器模拟检查，用户实际主题待验收 |
+| injection_position、injection_depth、injection_order、injection_trigger | SillyTavern core 1.18.0 | [PromptManager.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/PromptManager.js) 的 INJECTION_POSITION、shouldTrigger；[openai.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/openai.js) 的 populateInjections | high / 位置 0 顺序、1 深度；normal 新生成、continue 续写；无触发条件始终启用。单元测试与模拟请求覆盖 |
+| world_info_position、triggers、useProbability | SillyTavern core 1.18.0 | [world-info.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/world-info.js) | high / 0/1 角色前后、4 深度、5/6 示例前后；2/3/7 按上述映射处理，复杂激活规则不冒充完整宿主执行 |
+
+深度按独立番外参考消息倒数计算，过深时放在参考开头；同位置按 order 从高到低排列，保留消息角色。不会插入或修改正文聊天。最后仍追加本次番外格式与续写要求。未知的空标记略过并说明，不阻断请求。以上通过本地模拟宿主验证，尚未连接用户云端真实 API。

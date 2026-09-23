@@ -1,16 +1,17 @@
 import { HTML_PROMPT } from './html-work.js';
 import { expandPrompt, macroContext } from './prompt-macros.js';
+import { shouldTrigger, promptRole, injectHistory } from './prompt-injection.js';
 
 const string = value => typeof value === 'string' ? value : '';
-const SUPPORTED_MARKERS = new Set(['charDescription', 'charPersonality', 'scenario', 'personaDescription', 'dialogueExamples', 'worldInfoBefore', 'worldInfoAfter', 'chatHistory']);
 
 export const expand = expandPrompt;
 function matchesKey(key, corpus, sensitive = false, whole = false) {
+  key = string(key);
   if (!key) return false;
   if (/^\/.+\/[a-z]*$/.test(key)) {
     const last = key.lastIndexOf('/');
     try { return new RegExp(key.slice(1, last), key.slice(last + 1).replace(/[gy]/g, '')).test(corpus); }
-    catch { throw new Error(`世界书关键词正则无效：${key.slice(0, 80)}`); }
+    catch { return false; }
   }
   const needle = sensitive ? key : key.toLocaleLowerCase();
   const haystack = sensitive ? corpus : corpus.toLocaleLowerCase();
@@ -18,28 +19,38 @@ function matchesKey(key, corpus, sensitive = false, whole = false) {
   const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'u').test(haystack);
 }
-export function selectWorldEntries(books, corpus, snapshot, macros = macroContext()) {
+export function selectWorldEntries(books, corpus, snapshot, macros = macroContext(), generationType = 'normal') {
   const selected = [];
   for (const book of books || []) for (const entry of Object.values(book.entries || {})) {
-    if (entry.disable) continue;
+    if (entry.disable || !shouldTrigger(entry.triggers, generationType)) continue;
     const name = entry.comment || `条目 ${entry.uid}`;
-    if (entry.sticky || entry.cooldown || entry.delay || entry.group || entry.vectorized || entry.useProbability && Number(entry.probability) < 100 || entry.scanDepth != null || entry.matchCharacterDescription || entry.matchPersonaDescription || entry.triggers?.length) {
-      throw new Error(`世界书「${book.name}」的「${name}」使用了基础版未适配的高级触发条件。请为番外选择简化世界书。`);
+    if (entry.sticky || entry.cooldown || entry.delay || entry.group || entry.vectorized || entry.scanDepth != null || entry.delayUntilRecursion) {
+      macros.warnings.add(`世界书「${book.name} / ${name}」使用复杂触发设置；本次按独立番外的常驻／关键词匹配取材，不复用正文的计时、分组、扫描深度或向量状态。`);
     }
-    if (![0, 1, 4].includes(Number(entry.position ?? 0))) throw new Error(`世界书「${name}」使用了未适配的插入位置。基础版支持角色前、角色后和聊天深度。`);
-    if (entry.role != null && ![0, 1, 2].includes(Number(entry.role))) throw new Error(`世界书「${name}」的角色类型不受支持。`);
+    if (entry.useProbability && Number(entry.probability) < 100 && Math.random() * 100 >= Math.max(0, Number(entry.probability))) continue;
+    const searchCorpus = [corpus, entry.matchCharacterDescription ? snapshot.character?.description : '', entry.matchCharacterPersonality ? snapshot.character?.personality : '', entry.matchScenario ? snapshot.character?.scenario : '', entry.matchPersonaDescription ? snapshot.persona?.description : ''].filter(Boolean).join('\n');
     let active = entry.constant === true;
     if (!active) {
       const keys = Array.isArray(entry.key) ? entry.key : [];
-      active = keys.some(key => matchesKey(expand(key, snapshot, macros), corpus, entry.caseSensitive === true, entry.matchWholeWords === true));
+      active = keys.some(key => matchesKey(expand(key, snapshot, macros), searchCorpus, entry.caseSensitive === true, entry.matchWholeWords === true));
       const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : [];
       if (active && entry.selective && secondary.length) {
-        const checks = secondary.map(key => matchesKey(expand(key, snapshot, macros), corpus, entry.caseSensitive === true, entry.matchWholeWords === true));
+        const checks = secondary.map(key => matchesKey(expand(key, snapshot, macros), searchCorpus, entry.caseSensitive === true, entry.matchWholeWords === true));
         const logic = Number(entry.selectiveLogic || 0);
         active = logic === 0 ? checks.some(Boolean) : logic === 1 ? !checks.every(Boolean) : logic === 2 ? !checks.some(Boolean) : logic === 3 ? checks.every(Boolean) : false;
       }
     }
-    if (active) selected.push({ content: expand(entry.content, snapshot, macros), position: Number(entry.position || 0), order: Number(entry.order || 0), depth: Number(entry.depth ?? 4), role: ['system', 'user', 'assistant'][Number(entry.role || 0)] });
+    if (active) {
+      let position = Number(entry.position || 0);
+      if ([2, 3].includes(position)) {
+        macros.warnings.add(`世界书「${name}」位于作者注释附近；独立番外没有正文作者注释，已放入番外前文深度位置。`);
+        position = 4;
+      } else if (![0, 1, 4, 5, 6].includes(position)) {
+        macros.warnings.add(`世界书「${name}」的扩展插入位置在番外中按角色后资料提供。`);
+        position = 1;
+      }
+      selected.push({ content: expand(entry.content, snapshot, macros), position, order: Number(entry.order || 0), depth: Number(entry.depth ?? 4), role: ['system', 'user', 'assistant'][Number(entry.role || 0)] || 'system' });
+    }
   }
   return selected.sort((a, b) => b.order - a.order);
 }
@@ -53,7 +64,8 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
   const continuation = expand(instruction, snapshot, macros);
   const originalContext = Array.isArray(snapshot.context) ? snapshot.context : [];
   const corpus = [initial, summary?.content || '', ...originalContext.map(m => m.content), ...reference.map(ch => ch.content), continuation].join('\n');
-  const entries = selectWorldEntries(snapshot.books, corpus, snapshot, macros);
+  const generationType = chapters.length ? 'continue' : 'normal';
+  const entries = selectWorldEntries(snapshot.books, corpus, snapshot, macros, generationType);
   const before = entries.filter(e => e.position === 0).map(e => e.content).join('\n\n');
   const after = entries.filter(e => e.position === 1).map(e => e.content).join('\n\n');
   const history = [];
@@ -66,11 +78,13 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
   });
   const blocks = {
     charDescription: expand(c.description, snapshot, macros), charPersonality: expand(c.personality, snapshot, macros), scenario: expand(c.scenario, snapshot, macros),
-    personaDescription: expand(u.description, snapshot, macros), dialogueExamples: expand(c.mes_example, snapshot, macros), worldInfoBefore: before, worldInfoAfter: after,
+    personaDescription: expand(u.description, snapshot, macros), dialogueExamples: [entries.filter(e => e.position === 5).map(e => e.content).join('\n'), expand(c.mes_example, snapshot, macros), entries.filter(e => e.position === 6).map(e => e.content).join('\n')].filter(Boolean).join('\n\n'), worldInfoBefore: before, worldInfoAfter: after,
   };
   const messages = [{ role: 'system', content: `你正在创作独立番外。角色为 ${c.name || '角色'}，用户人物为 ${u.name || '我'}。这篇番外不改变正文。采用用户要求的平行设定，保持人物核心特征。` }];
   const preset = snapshot.preset;
   let historyAdded = false;
+  const injections = entries.filter(e => e.position === 4);
+  const historySlot = { history: true }; 
   if (preset?.prompts?.length) {
     const order = preset.prompt_order?.find(o => String(o.character_id) === String(snapshot.characterIndex))
       || preset.prompt_order?.find(o => Number(o.character_id) === 100001)
@@ -81,12 +95,20 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
       if (!item.enabled) continue;
       const p = preset.prompts.find(p => p.identifier === item.identifier);
       if (!p) continue;
-      if (p.injection_position || p.injection_trigger?.length) throw new Error('所选预设包含深度或条件注入；基础版请使用按顺序排列的提示词预设。');
-      if (p.marker) {
-        if (!SUPPORTED_MARKERS.has(p.identifier)) throw new Error(`未适配的预设占位项：${p.identifier}`);
-        if (p.identifier === 'chatHistory') { messages.push(...history); historyAdded = true; }
-        else if (blocks[p.identifier]) messages.push({ role: 'system', content: blocks[p.identifier] });
-      } else if (p.content) messages.push({ role: ['system', 'user', 'assistant'].includes(p.role) ? p.role : 'system', content: expand(p.content, snapshot, macros) });
+      if (!shouldTrigger(p.injection_trigger, generationType)) continue;
+      if (p.marker && p.identifier === 'chatHistory') {
+        if (!historyAdded) { messages.push(historySlot); historyAdded = true; }
+        continue;
+      }
+      let content;
+      if (p.marker && Object.hasOwn(blocks, p.identifier)) content = blocks[p.identifier];
+      else if (p.content) content = expand(p.content, snapshot, macros);
+      else if (p.marker) { macros.warnings.add('预设占位项「' + (p.name || p.identifier) + '」没有可读取的内容，本次略过该空项。'); continue; }
+      if (!content?.trim()) continue;
+      const role = promptRole(p.role);
+      if (Number(p.injection_position) === 1) {
+        injections.push({ content, role, depth: p.injection_depth ?? 4, order: p.injection_order ?? 100 });
+      } else messages.push({ role, content });
     }
   } else {
     for (const key of ['worldInfoBefore', 'charDescription', 'charPersonality', 'scenario', 'personaDescription', 'dialogueExamples', 'worldInfoAfter']) {
@@ -94,8 +116,9 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
     }
     if (c.system_prompt) messages.push({ role: 'system', content: expand(c.system_prompt, snapshot, macros) });
   }
-  if (!historyAdded) messages.push(...history);
-  for (const e of entries.filter(e => e.position === 4)) messages.splice(Math.max(1, messages.length - Math.max(0, e.depth)), 0, { role: e.role, content: e.content });
+  const injectedHistory = injectHistory(history, injections);
+  if (historyAdded) messages.splice(messages.indexOf(historySlot), 1, ...injectedHistory);
+  else messages.push(...injectedHistory);
   if (mode === 'html' && chapters.length) throw new Error('HTML 作品不支持续写。');
   const format = mode === 'html' ? HTML_PROMPT : mode === 'phone'
     ? '输出纯 JSON，统一结构为 {"messages":[{"type":"text","sender":"char","time":"23:48","text":"内容"}]}。messages 每个对象是一条消息，必须有且只有一个 type；sender 为 user、char 或 system。时间写在消息的 time 字段，不单独输出 type:time，不输出 name。type 为 text（纯文字）、voice（语音，text 转写、duration 时长）、transfer（amount 金额、status 状态、text 备注）、image（url 图床地址或 text 图片描述）、sticker（url 图床或 sticker 内置标识 happy/hug/blush/goodnight）、call（发起语音通话）、video（发起视频通话）、location（title 虚拟地点、address 虚拟地址）、share（title 原帖标题、description 简介、source 来源、thumbnail 可选缩略图）。不虚构图床 URL，无素材使用描述或内置表情。不得输出代码围栏或说明。'

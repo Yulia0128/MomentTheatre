@@ -586,7 +586,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       el('section', { class: 'settings-group' }, el('h2', {}, '数据'), el('p', { class: 'muted' }, '番外保存在当前浏览器、当前酒馆账号的独立资料库。更新扩展代码不会覆盖资料；跨设备请使用备份恢复。'),
         el('div', { class: 'actions' }, button('按分类导出 ZIP', exportCategories), button('备份全部资料', () => download(backup(state), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         ),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.2：原生扩展入口、模型拉取、即时草稿恢复；修复生成状态误判与宏拦截，最大回复支持 200000 token。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.3：扩展入口跟随酒馆原生样式；接入预设深度和生成条件，复杂世界书采用独立番外兼容取材，取消前置阻断。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -613,7 +613,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const beforeUnload = e => { flushInputs(); if (task || editing) { e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('resize', placeLauncher); window.addEventListener('beforeunload', beforeUnload);
   launcher.hidden = state.settings.launcherEnabled === false;
-  try { nativePanel = host.mountSettingsPanel?.({ open, enabled: !launcher.hidden, setEnabled: setLauncherEnabled }); } catch (error) { report(error); }
+  try { nativePanel = host.mountSettingsPanel?.({ enabled: !launcher.hidden, setEnabled: setLauncherEnabled }); } catch (error) { report(error); }
   window.addEventListener('pagehide', flushInputs); document.addEventListener('visibilitychange', onVisibilityChange);
   placeLauncher(); render();
   try { catalog = await host.catalog(); if (tab === 'settings') render(); } catch (error) { report(error); }
