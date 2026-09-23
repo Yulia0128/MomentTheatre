@@ -2,7 +2,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.1';
+export const VERSION = '1.0.2';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -14,11 +14,11 @@ export const clamp = (value, min, max, fallback) => Number.isFinite(Number(value
 export const DEFAULT_SETTINGS = Object.freeze({
   theme: 'day', apiMode: 'main', endpoint: '', model: '', character: '', persona: '', books: [], preset: '',
   readContext: false, contextCount: 10, words: 2000, targetMessages: 20, maxTokens: 4096, stream: true,
-  proseTheme: 'prose-stamp', phoneTheme: 'phone-light', launcher: { x: null, y: null },
+  proseTheme: 'prose-stamp', phoneTheme: 'phone-light', launcherEnabled: true, launcher: { x: null, y: null }, models: [], modelsEndpoint: '',
   personaMode: 'current', customPersonaName: '', customPersonaDescription: '', presetOverrides: {}, bookOverrides: {},
 });
 export function emptyState() {
-  return { schemaVersion: SCHEMA, themeCatalogVersion: 1, settings: clone(DEFAULT_SETTINGS), categories: [], stories: [], themes: [], errors: [], draft: { prompt: '', mode: 'prose' } };
+  return { schemaVersion: SCHEMA, themeCatalogVersion: 1, settings: clone(DEFAULT_SETTINGS), categories: [], stories: [], themes: [], errors: [], editorDraft: null, draft: { prompt: '', mode: 'prose' } };
 }
 export function newStory({ title, prompt, mode, themeId, snapshot }) {
   return { id: id(), title: text(title, 120) || '未命名番外', prompt: text(prompt), mode: normalizeMode(mode),
@@ -72,12 +72,16 @@ export function normalizeState(raw) {
         { ...(typeof value?.enabled === 'boolean' ? { enabled: value.enabled } : {}), ...(typeof value?.content === 'string' ? { content: text(value.content, 100000) } : {}) }]))]));
   }
   state.settings.readContext = s.readContext === true;
-  for (const [key, min, max] of [['contextCount', 1, 200], ['words', 100, 20000], ['targetMessages', 1, 1000], ['maxTokens', 128, 64000]]) {
+  for (const [key, min, max] of [['contextCount', 1, 200], ['words', 100, 20000], ['targetMessages', 1, 1000], ['maxTokens', 128, 200000]]) {
     state.settings[key] = clamp(s[key] ?? DEFAULT_SETTINGS[key], min, max, DEFAULT_SETTINGS[key]);
   }
   state.settings.stream = s.stream !== false;
+  state.settings.launcherEnabled = s.launcherEnabled !== false;
+  state.settings.models = strings(s.models, 10000);
+  state.settings.modelsEndpoint = text(s.modelsEndpoint, 2000);
   if (Number.isFinite(s.launcher?.x) && Number.isFinite(s.launcher?.y)) state.settings.launcher = { x: s.launcher.x, y: s.launcher.y };
   state.draft = { prompt: text(raw.draft?.prompt), mode: normalizeMode(raw.draft?.mode) };
+  state.editorDraft = raw.editorDraft && typeof raw.editorDraft === 'object' ? { storyId: text(raw.editorDraft.storyId, 100), chapterId: text(raw.editorDraft.chapterId, 100), title: text(raw.editorDraft.title, 120), content: text(raw.editorDraft.content), complete: raw.editorDraft.complete !== false } : null;
   const categoryIds = new Set();
   state.categories = list(raw.categories ?? [], 1000, '分类').map(c => {
     const key = safeId(c.id); assert(!categoryIds.has(key), '分类标识重复。'); categoryIds.add(key);
@@ -113,7 +117,7 @@ export function normalizeState(raw) {
   return state;
 }
 export function backup(state) {
-  // Whitelisted settings never contain credentials. Credentials live only in scoped session storage.
+  // Whitelisted settings never contain credentials. Credentials live separately in scoped browser storage.
   const clean = normalizeState(state);
   return JSON.stringify({ ...clean, exportedAt: new Date().toISOString(), app: 'shunxi' }, null, 2);
 }

@@ -1,16 +1,10 @@
 import { HTML_PROMPT } from './html-work.js';
+import { expandPrompt, macroContext } from './prompt-macros.js';
 
 const string = value => typeof value === 'string' ? value : '';
 const SUPPORTED_MARKERS = new Set(['charDescription', 'charPersonality', 'scenario', 'personaDescription', 'dialogueExamples', 'worldInfoBefore', 'worldInfoAfter', 'chatHistory']);
 
-export function expand(text, snapshot) {
-  const c = snapshot.character || {}, u = snapshot.persona || {};
-  const macros = { char: c.name || '角色', user: u.name || '我', description: c.description || '', personality: c.personality || '', scenario: c.scenario || '', persona: u.description || '', mesExamples: c.mes_example || '', original: '' };
-  let result = string(text);
-  for (let i = 0; i < 3; i++) result = result.replace(/\{\{(char|user|description|personality|scenario|persona|mesExamples|original)\}\}/g, (_, key) => macros[key]);
-  if (/<%|\{\{/.test(result)) throw new Error('所选资料包含基础版未适配的宏或脚本。请使用仅含人物基础宏的预设／世界书，避免误用正文变量。');
-  return result;
-}
+export const expand = expandPrompt;
 function matchesKey(key, corpus, sensitive = false, whole = false) {
   if (!key) return false;
   if (/^\/.+\/[a-z]*$/.test(key)) {
@@ -24,7 +18,7 @@ function matchesKey(key, corpus, sensitive = false, whole = false) {
   const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'u').test(haystack);
 }
-export function selectWorldEntries(books, corpus, snapshot) {
+export function selectWorldEntries(books, corpus, snapshot, macros = macroContext()) {
   const selected = [];
   for (const book of books || []) for (const entry of Object.values(book.entries || {})) {
     if (entry.disable) continue;
@@ -37,28 +31,29 @@ export function selectWorldEntries(books, corpus, snapshot) {
     let active = entry.constant === true;
     if (!active) {
       const keys = Array.isArray(entry.key) ? entry.key : [];
-      active = keys.some(key => matchesKey(expand(key, snapshot), corpus, entry.caseSensitive === true, entry.matchWholeWords === true));
+      active = keys.some(key => matchesKey(expand(key, snapshot, macros), corpus, entry.caseSensitive === true, entry.matchWholeWords === true));
       const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : [];
       if (active && entry.selective && secondary.length) {
-        const checks = secondary.map(key => matchesKey(expand(key, snapshot), corpus, entry.caseSensitive === true, entry.matchWholeWords === true));
+        const checks = secondary.map(key => matchesKey(expand(key, snapshot, macros), corpus, entry.caseSensitive === true, entry.matchWholeWords === true));
         const logic = Number(entry.selectiveLogic || 0);
         active = logic === 0 ? checks.some(Boolean) : logic === 1 ? !checks.every(Boolean) : logic === 2 ? !checks.some(Boolean) : logic === 3 ? checks.every(Boolean) : false;
       }
     }
-    if (active) selected.push({ content: expand(entry.content, snapshot), position: Number(entry.position || 0), order: Number(entry.order || 0), depth: Number(entry.depth ?? 4), role: ['system', 'user', 'assistant'][Number(entry.role || 0)] });
+    if (active) selected.push({ content: expand(entry.content, snapshot, macros), position: Number(entry.position || 0), order: Number(entry.order || 0), depth: Number(entry.depth ?? 4), role: ['system', 'user', 'assistant'][Number(entry.role || 0)] });
   }
   return selected.sort((a, b) => b.order - a.order);
 }
 export function buildMessages({ snapshot, prompt, mode, chapters = [], instruction = '', words = 2000, targetMessages = 20, summary = null, maxInputChars = 60000 }) {
   if (!snapshot) throw new Error('这篇番外缺少人物资料，请重新选择资料后创建。');
+  const macros = macroContext();
   const c = snapshot.character || {}, u = snapshot.persona || {};
   const reference = chapters.slice(summary?.through || 0);
   if (reference.length > 10) throw new Error('前文尚未完成剧情总结。');
-  const initial = expand(prompt, snapshot);
-  const continuation = expand(instruction, snapshot);
+  const initial = expand(prompt, snapshot, macros);
+  const continuation = expand(instruction, snapshot, macros);
   const originalContext = Array.isArray(snapshot.context) ? snapshot.context : [];
   const corpus = [initial, summary?.content || '', ...originalContext.map(m => m.content), ...reference.map(ch => ch.content), continuation].join('\n');
-  const entries = selectWorldEntries(snapshot.books, corpus, snapshot);
+  const entries = selectWorldEntries(snapshot.books, corpus, snapshot, macros);
   const before = entries.filter(e => e.position === 0).map(e => e.content).join('\n\n');
   const after = entries.filter(e => e.position === 1).map(e => e.content).join('\n\n');
   const history = [];
@@ -70,8 +65,8 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
     history.push({ role: 'assistant', content: chapter.content });
   });
   const blocks = {
-    charDescription: expand(c.description, snapshot), charPersonality: expand(c.personality, snapshot), scenario: expand(c.scenario, snapshot),
-    personaDescription: expand(u.description, snapshot), dialogueExamples: expand(c.mes_example, snapshot), worldInfoBefore: before, worldInfoAfter: after,
+    charDescription: expand(c.description, snapshot, macros), charPersonality: expand(c.personality, snapshot, macros), scenario: expand(c.scenario, snapshot, macros),
+    personaDescription: expand(u.description, snapshot, macros), dialogueExamples: expand(c.mes_example, snapshot, macros), worldInfoBefore: before, worldInfoAfter: after,
   };
   const messages = [{ role: 'system', content: `你正在创作独立番外。角色为 ${c.name || '角色'}，用户人物为 ${u.name || '我'}。这篇番外不改变正文。采用用户要求的平行设定，保持人物核心特征。` }];
   const preset = snapshot.preset;
@@ -91,13 +86,13 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
         if (!SUPPORTED_MARKERS.has(p.identifier)) throw new Error(`未适配的预设占位项：${p.identifier}`);
         if (p.identifier === 'chatHistory') { messages.push(...history); historyAdded = true; }
         else if (blocks[p.identifier]) messages.push({ role: 'system', content: blocks[p.identifier] });
-      } else if (p.content) messages.push({ role: ['system', 'user', 'assistant'].includes(p.role) ? p.role : 'system', content: expand(p.content, snapshot) });
+      } else if (p.content) messages.push({ role: ['system', 'user', 'assistant'].includes(p.role) ? p.role : 'system', content: expand(p.content, snapshot, macros) });
     }
   } else {
     for (const key of ['worldInfoBefore', 'charDescription', 'charPersonality', 'scenario', 'personaDescription', 'dialogueExamples', 'worldInfoAfter']) {
       if (blocks[key]) messages.push({ role: 'system', content: blocks[key] });
     }
-    if (c.system_prompt) messages.push({ role: 'system', content: expand(c.system_prompt, snapshot) });
+    if (c.system_prompt) messages.push({ role: 'system', content: expand(c.system_prompt, snapshot, macros) });
   }
   if (!historyAdded) messages.push(...history);
   for (const e of entries.filter(e => e.position === 4)) messages.splice(Math.max(1, messages.length - Math.max(0, e.depth)), 0, { role: e.role, content: e.content });
@@ -111,5 +106,6 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
     : `现在生成第一节，${target}。\n${format}` });
   const chars = messages.reduce((n, m) => n + m.content.length, 0);
   if (chars > maxInputChars) throw new Error(`本次输入约 ${chars} 字符，超过设置的 ${maxInputChars} 字符上限。`);
+  Object.defineProperty(messages, 'warnings', { value: [...macros.warnings] });
   return messages;
 }

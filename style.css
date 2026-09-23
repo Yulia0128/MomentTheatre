@@ -47,3 +47,6 @@ button:hover{background:transparent}.primary:hover{background:var(--ink);opacity
 .html-frame{height:680px;background:transparent;color-scheme:light;border:0}.html-diagnostic{padding:16px 0;font-size:13px}.html-diagnostic>p{margin-bottom:12px}@media(max-width:700px){.html-frame{height:640px}}
 
 .prose-frame{background:transparent;color-scheme:light;border:0;border-radius:0}
+
+/* 1.0.2 */
+.launcher{width:32px;height:32px;padding:2.667px}.launcher .mark{width:26.667px}.launcher[hidden]{display:none!important}.generation-error{border:1px solid var(--line);padding:14px;margin:14px 0}.generation-error p,.generation-notes p{overflow-wrap:anywhere;font-size:13px}.generation-notes{margin:12px 0;font-size:13px}.model-fetch{display:flex;flex-direction:column;align-items:flex-start;gap:10px;justify-content:center}.model-status{overflow-wrap:anywhere}

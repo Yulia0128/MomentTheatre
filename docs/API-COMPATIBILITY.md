@@ -68,3 +68,12 @@
 2026-09-23 再次核对 SillyTavern 1.18.0 的 src/endpoints/extensions.js：POST /api/extensions/version 接收 extensionName、global，返回 isUpToDate、remoteUrl 等；当前适配器按账号／全局目录检查。原位更新使用酒馆扩展管理，服务端 /update 拉取当前 Git 分支。没有硬编码 GitHub 用户名。
 
 来源：https://github.com/SillyTavern/SillyTavern/blob/1.18.0/src/endpoints/extensions.js 。置信度：源码高；实机 Git 安装与远程更新尚待仓库发布后验收。
+
+
+## 1.0.2 原生接口核对（2026-09-23）
+
+- `isGenerating()`：SillyTavern core 1.18.0 `public/script.js` 导出，返回发送中／群聊生成状态。通过扩展入口相对路径加载核心模块；`GENERATION_STARTED(type, options, dryRun)` 在试算也触发，现忽略第三参数为真的事件。源码置信度高；本地模拟宿主验证不替代用户云端实机验证。
+- `#extensions_settings`：1.18.0 `public/index.html` 原生扩展设置容器；使用独立 details 入口，复用宿主基础样式，不依赖酒馆助手。
+- `POST /api/backends/chat-completions/status`：1.18.0 `src/endpoints/backends/chat-completions.js`，custom_url 指定独立连接；custom_include_headers 显式传递独立 Authorization，secret_id 不引用主密钥，返回 data 数组中的 id 为模型。失败时酒馆可能不透传服务商原始状态，界面不虚构状态码。
+- 宏语法依据 1.18.0 `public/scripts/macros.js` 和 `variables.js`。独立 Map 仅实现当前支持的取值／赋值格式，不调用正文变量接口。不支持的宏或 EJS 按原文交给模型并显示说明，不声称执行其动态逻辑；高级世界书触发和预设深度条件限制仍适用。
+- 数据：IndexedDB 完整资料库 + localStorage 即时输入恢复记录，按原 scope 隔离，带 revision/writer/sequence 防止旧保存覆盖较新的输入。API 密钥另存浏览器账号命名空间，不进入状态备份。

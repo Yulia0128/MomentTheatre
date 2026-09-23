@@ -39,10 +39,11 @@ export async function ensureSummaries({ story, host, settings, signal, onPhase, 
   }
   return story.summaries.filter(s => s.through <= target).sort((a,b) => b.through - a.through)[0] || null;
 }
-export async function generateChapter({ host, settings, snapshot, story, prompt, mode, instruction = '', signal, onChunk, onPhase, summary }) {
+export async function generateChapter({ host, settings, snapshot, story, prompt, mode, instruction = '', signal, onChunk, onPhase, onWarnings, summary }) {
   if (mode === 'html') {
     if (story?.chapters?.length) throw new Error('HTML 作品不支持续写。');
     const messages = buildMessages({ snapshot, prompt, mode, maxInputChars: 1000000 });
+    onWarnings?.(messages.warnings || []);
     checkInput(messages); signal?.throwIfAborted(); onPhase?.('正在生成完整 HTML…');
     const content = cleanHtml(await host.generate({ messages, settings, snapshot, signal, onChunk }));
     signal?.throwIfAborted();
@@ -53,6 +54,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
   const target = mode === 'phone' ? settings.targetMessages || 20 : settings.words;
   const unit = mode === 'phone' ? '条' : '字';
   const messages = buildMessages({ snapshot, prompt, mode, instruction, chapters: story?.chapters || [], words: settings.words, targetMessages: target, summary, maxInputChars: 1000000 });
+  onWarnings?.(messages.warnings || []);
   let content = '', rawPart = '', rounds = 0;
   for (; rounds <= 3; rounds++) {
     signal?.throwIfAborted(); checkInput(messages);

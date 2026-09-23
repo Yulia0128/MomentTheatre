@@ -66,7 +66,7 @@ export function renderReader(story, theme, chapterIndex = null, themeForChapter 
       content = chapter.content.split(/\n\s*\n/).map(p => `<p class="paragraph">${renderProseInline(p)}</p>`).join('');
     }
     const heading = mode === 'phone' ? `<h2>第 ${n} 节${chapter.complete ? '' : ' · 未完成'}</h2>` : index === firstProse ? `<h1 class="prose-title">${escapeHtml(story.title)}</h1>` : '';
-    return `<section class="chapter ${mode === 'phone' ? 'phone-chapter' : 'prose-chapter'}" data-chapter="${n}" style="${escapeHtml(vars)}"><style>${compiled.fonts}\n@scope ([data-chapter="${n}"]) { ${compiled.css} }</style>${heading}${content}</section>`;
+    return `<section class="chapter ${mode === 'phone' ? 'phone-chapter' : 'prose-chapter'}" data-chapter="${n}" style="${escapeHtml(vars)}"><style>${compiled.fonts}\n@scope ([data-chapter="${n}"]) { ${compiled.css} ${mode === 'prose' ? '.prose-chapter,.paragraph{font-size:14px!important}.prose-title{font-size:26px!important}' : ''} }</style>${heading}${content}</section>`;
   }).join('');
   // The same inert document is used in sandboxed previews and standalone category exports.
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: http: data:; font-src https: http: data:; base-uri 'none'; form-action 'none'"><title>${escapeHtml(story.title)}</title><style>

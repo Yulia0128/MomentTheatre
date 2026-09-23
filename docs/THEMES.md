@@ -26,7 +26,7 @@
     "background": "#F4E7CB",
     "color": "#493C2C",
     "fontFamily": "\"京华老宋体\", \"Songti SC\", SimSun, serif",
-    "fontSize": "18px",
+    "fontSize": "14px",
     "lineHeight": "2.1"
   },
   "css": ".paragraph { text-indent: 2em; margin-bottom: 1.2em; }"
@@ -42,7 +42,7 @@
 | background | 正文背景或手机屏幕底色；手机外部始终透出插件日夜底色 | #F9F8F6 |
 | color | 正文颜色 | #282724 |
 | fontFamily | 本地／已声明外部字体及回退字体 | "PingFang SC", sans-serif |
-| fontSize | 正文字号 | 18px |
+| fontSize | 正文字号 | 14px |
 | lineHeight | 行高 | 2 |
 | bubble | 对方消息气泡 | #FFFFFF |
 | ownBubble | 我方消息气泡 | #E3E1DB |
@@ -112,3 +112,5 @@ sender 为 `char`、`user`、`system`。type 支持 `text`、`voice`、`transfer
 - location：`title` 填虚拟地名，`address` 填虚拟地址；自动显示简化地图和定位标志，不请求真实地图。
 - share：`title` 填原帖标题，`description` 填简洁信息，`source` 填来源；可选 `thumbnail` 为安全图片地址。
 - call／video：只显示「发起语音／视频通话」。voice 的 `text` 是展开后显示的转写文字，不需要音频文件。
+
+1.0.2 起阅读器统一将正文设为 14px、标题设为 26px，预览、旧作品与导出阅读文件一致；只覆盖字号，不覆盖字体、颜色或装饰。

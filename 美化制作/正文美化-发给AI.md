@@ -23,10 +23,10 @@
     "background": "#F6F2EA",
     "color": "#302E29",
     "fontFamily": "'Songti SC', SimSun, Georgia, serif",
-    "fontSize": "18px",
+    "fontSize": "14px",
     "lineHeight": "2"
   },
-  "css": ".prose-chapter { padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: clamp(24px, 5vw, 32px); line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; }"
+  "css": ".prose-chapter { padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: 26px; line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; }"
 }
 ```
 
@@ -38,7 +38,7 @@
 | `tokens` | 必须是对象；本正文框架使用表中示例的 5 个字段，所有值均为字符串。 |
 | `css` | 一个 CSS 字符串，用于补充排版、边线、渐变等；最多 30,000 字符。无需额外包裹标签或作用域。 |
 
-`background` 是纸面容器的底色，不是整块阅读窗口的底色；纸面之外始终透明，直接透出瞬息日夜背景。`color` 是文字色，`fontFamily` 是字体名称及后备字体（可使用下面声明的外部字体），`fontSize` 是字号，`lineHeight` 是行高。字号和行高也必须写成字符串，例如 `"18px"`、`"2"`。
+`background` 是纸面容器的底色，不是整块阅读窗口的底色；纸面之外始终透明，直接透出瞬息日夜背景。`color` 是文字色，`fontFamily` 是字体名称及后备字体（可使用下面声明的外部字体），`fontSize` 是字号，`lineHeight` 是行高。字号和行高也必须写成字符串，例如 `"14px"`、`"2"`。
 
 ## 已有结构与可用选择器
 
@@ -140,7 +140,7 @@
 
 ## 正文主题的固定要求
 
-- 正文采用正常阅读字号（默认 18px，可在手机缩小到 17px），不得随 PC 窗口拉宽而放大。普通正文 font-weight: 400，加粗 strong 为 700，必须能明显区分；不要给普通段落套加粗。
+- 正文采用固定 14px，标题固定 26px，不得随 PC 窗口拉宽而放大。普通正文 font-weight: 400，加粗 strong 为 700，必须能明显区分；不要给普通段落套加粗。
 - 标题使用实际 .prose-title，不从正文首段猜测标题。标题与顶部贴图分开，标题位于贴图下方。不得添加“阅读预览”等固定副标题或章节编号。
 - 所有正文主题预览统一使用 以下示例：标题“这是标题。”；正文依次为“这是引号文字。”、加粗的“这是加粗文字。”、斜体的“这是斜体文字。”、删除线的“这是删除文字。”、普通无格式的“这是一大段正文正文正文正文正文正文”。不要添加格式名称标签、主题名标题或额外故事。
 - 修改既有主题保留原有装饰；邮票素笺的灰色虚线固定在实际标题下方，不能依赖第一段加粗文本。

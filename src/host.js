@@ -1,4 +1,5 @@
 import { clone, id } from './model.js';
+import { mountExtensionPanel } from './extension-panel.js';
 
 export function normalizeEndpoint(value) {
   let url;
@@ -48,12 +49,33 @@ export class TavernHost {
     this.scope = `tavern:${scope}`;
     this.sessionKey = `shunxi:${scope}:api-key`;
     const on = (name, callback) => { if (!name) return; c.eventSource.on(name, callback); this.disposers.push(() => c.eventSource.removeListener(name, callback)); };
-    on(c.eventTypes.GENERATION_STARTED, () => { this.mainBusy = true; });
+    // 1.18.0 emits GENERATION_STARTED even during prompt-only dry runs.
+    on(c.eventTypes.GENERATION_STARTED, (_type, _options, dryRun) => { if (!dryRun) this.mainBusy = true; });
     on(c.eventTypes.GENERATION_ENDED, () => { this.mainBusy = false; });
     on(c.eventTypes.GENERATION_STOPPED, () => { this.mainBusy = false; });
   }
-  getKey() { try { return sessionStorage.getItem(this.sessionKey) || ''; } catch { return ''; } }
-  setKey(key) { try { if (key) sessionStorage.setItem(this.sessionKey, key); else sessionStorage.removeItem(this.sessionKey); } catch { throw new Error('无法保存本次会话的密钥，请检查浏览器存储权限。'); } }
+  async initialize() {
+    const core = await import(new URL('../../../../script.js', this.extensionUrl).href);
+    if (typeof core.isGenerating !== 'function') throw new Error('酒馆缺少 isGenerating 状态接口，需要 1.18.0 或兼容版本。');
+    this.isGenerating = core.isGenerating;
+  }
+  getKey() { try { const saved = localStorage.getItem(this.sessionKey); if (saved) return saved; const previous = sessionStorage.getItem(this.sessionKey) || ''; if (previous) this.setKey(previous); return previous; } catch { return ''; } }
+  setKey(key) { try { if (key) localStorage.setItem(this.sessionKey, key); else localStorage.removeItem(this.sessionKey); sessionStorage.removeItem(this.sessionKey); } catch { throw new Error('无法保存密钥，请检查浏览器存储权限。'); } }
+  mountSettingsPanel(controller) { return mountExtensionPanel(controller); }
+  async listModels(endpoint, { signal } = {}) {
+    const key = this.getKey();
+    // Native backend requests /models on the supplied custom endpoint; no browser CORS proxy.
+    const response = await fetch('/api/backends/chat-completions/status', {
+      method: 'POST', headers: this.getContext().getRequestHeaders(), signal,
+      body: JSON.stringify({ chat_completion_source: 'custom', custom_url: normalizeEndpoint(endpoint),
+        secret_id: 'shunxi-use-explicit-header', custom_include_headers: JSON.stringify({ Authorization: key ? `Bearer ${key}` : '' }) }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || data?.error) throw Object.assign(new Error(data?.error?.message || data?.message || (response.ok ? '服务商模型列表读取失败，请检查 API 地址、密钥及酒馆服务端日志。' : `拉取模型失败：HTTP ${response.status}`)), { status: response.ok ? undefined : response.status });
+    const models = [...new Set((Array.isArray(data?.data) ? data.data : []).map(item => item?.id).filter(id => typeof id === 'string' && id.trim()))].sort();
+    if (!models.length) throw new Error('API 未返回可选模型，服务商需要支持 OpenAI 兼容的 /models 接口。');
+    return models;
+  }
   async catalog() {
     const c = this.getContext(), p = c.powerUserSettings;
     if (!Array.isArray(c.characters) || !p || typeof c.getWorldInfoNames !== 'function') throw new Error('酒馆资料接口尚未就绪，请稍后刷新资料。');
@@ -127,13 +149,17 @@ export class TavernHost {
       .map(m => ({ role: m.is_user ? 'user' : 'assistant', content: m.mes })) : [];
     return { character, characterIndex, persona, books, presetName: presetName || '', preset: applyPresetOverrides(preset, settings.presetOverrides?.[presetName], characterIndex), context, capturedAt: Date.now() };
   }
-  isMainBusy() { const stream = this.getContext().streamingProcessor; return this.mainBusy || Boolean(stream && !stream.isFinished && !stream.isStopped); }
+  isMainBusy() {
+    // Core truth also clears stale start events from commands / aborted preparation.
+    if (this.isGenerating) return Boolean(this.isGenerating());
+    return this.mainBusy;
+  }
   async generate({ messages, settings, snapshot, signal, onChunk }) {
     const c = this.getContext(), Service = c.ChatCompletionService;
     if (!Service?.sendRequest || !Service?.presetToGeneratePayload) throw new Error('当前酒馆缺少 ChatCompletionService，请使用 1.18.0 或兼容版本。');
     let payload;
     if (settings.apiMode === 'independent') {
-      if (!settings.model.trim()) throw new Error('请填写独立 API 的模型名称。');
+      if (!settings.model.trim()) throw new Error('请先在独立 API 设置中拉取并选择模型。');
       const key = this.getKey();
       payload = { chat_completion_source: 'custom', custom_url: normalizeEndpoint(settings.endpoint), model: settings.model.trim(),
         max_tokens: settings.maxTokens, messages, stream: settings.stream !== false, custom_prompt_post_processing: '',
@@ -148,7 +174,7 @@ export class TavernHost {
     }
     const conflictController = new AbortController();
     const requestSignal = signal ? AbortSignal.any([signal, conflictController.signal]) : conflictController.signal;
-    const stopIfMainStarts = () => { if (settings.apiMode === 'main') { conflictController.abort(); this.onMainConflict?.(); } };
+    const stopIfMainStarts = (_type, _options, dryRun) => { if (!dryRun && settings.apiMode === 'main') { conflictController.abort(); this.onMainConflict?.(); } };
     if (settings.apiMode === 'main') c.eventSource.on(c.eventTypes.GENERATION_STARTED, stopIfMainStarts);
     try {
       if (settings.apiMode === 'main' && this.isMainBusy()) throw new Error('正文已开始生成，请等待正文结束后重试。');

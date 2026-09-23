@@ -8,6 +8,7 @@ async function start() {
   let host;
   try {
     host = new TavernHost(() => globalThis.SillyTavern.getContext(), import.meta.url);
+    await host.initialize();
     await mount(host);
   } catch (error) {
     host?.dispose();
