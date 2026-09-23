@@ -1,6 +1,6 @@
 # 瞬息 · 番外小剧场
 
-Moment Theatre — 原生 SillyTavern 扩展，当前版本 **1.0.0**，适用于 **SillyTavern 1.18.0 及以上**。不依赖酒馆助手。
+Moment Theatre — 原生 SillyTavern 扩展，当前版本 **1.0.1**，适用于 **SillyTavern 1.18.0 及以上**。不依赖酒馆助手。
 
 在独立窗口中生成、阅读和整理番外，保存于独立资料库，不向正文聊天插入消息。
 
