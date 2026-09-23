@@ -1,0 +1,11 @@
+{
+  "display_name": "瞬息 · 番外小剧场",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "dependencies": [],
+  "js": "index.js",
+  "author": "瞬息",
+  "version": "1.0.0",
+  "minimum_client_version": "1.18.0"
+}
