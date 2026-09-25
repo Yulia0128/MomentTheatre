@@ -59,6 +59,8 @@ export class TavernHost {
     const core = await import(new URL('../../../../script.js', this.extensionUrl).href);
     if (typeof core.isGenerating !== 'function') throw new Error('酒馆缺少 isGenerating 状态接口，需要 1.18.0 或兼容版本。');
     this.isGenerating = core.isGenerating;
+    this.worldInfo = await import(new URL('../../../world-info.js', this.extensionUrl).href);
+    this.characterUtils = await import(new URL('../../../utils.js', this.extensionUrl).href);
   }
   getKey() { try { const saved = localStorage.getItem(this.sessionKey); if (saved) return saved; const previous = sessionStorage.getItem(this.sessionKey) || ''; if (previous) this.setKey(previous); return previous; } catch { return ''; } }
   setKey(key) { try { if (key) localStorage.setItem(this.sessionKey, key); else localStorage.removeItem(this.sessionKey); sessionStorage.removeItem(this.sessionKey); } catch { throw new Error('无法保存密钥，请检查浏览器存储权限。'); } }
@@ -81,7 +83,8 @@ export class TavernHost {
     const c = this.getContext(), p = c.powerUserSettings;
     if (!Array.isArray(c.characters) || !p || typeof c.getWorldInfoNames !== 'function') throw new Error('酒馆资料接口尚未就绪，请稍后刷新资料。');
     const manager = c.getPresetManager?.('openai');
-    return { currentCharacter: c.characters[c.characterId]?.name || '未打开角色聊天', currentPersona: c.name1 || '我',
+    const characterSources = await this.characterSources();
+    return { characterSources, currentCharacter: characterSources.name || '未打开角色聊天', currentPersona: c.name1 || '我',
       characters: c.characters.map((ch, i) => ({ value: ch.avatar, label: ch.name || `角色 ${i + 1}` })),
       personas: Object.entries(p.personas || {}).map(([value, label]) => ({ value, label })),
       books: c.getWorldInfoNames().map(name => ({ value: name, label: name })),
@@ -118,6 +121,29 @@ export class TavernHost {
       : manager.getCompletionPresetByName?.(actual)?.extensions?.regex_scripts;
     return { name: actual, rules: normalizeRegexRules(rules) };
   }
+  async characterSources() {
+    const c = this.getContext(), index = c.characterId;
+    const initial = index == null ? null : c.characters?.[index];
+    if (!initial) return { key:'', name:'', books:[], rules:[] };
+    const key = initial.avatar;
+    if (typeof c.unshallowCharacter !== 'function') throw new Error('当前酒馆不支持完整角色资料读取。');
+    await c.unshallowCharacter(String(index));
+    const latest = this.getContext();
+    if (latest.characters?.[latest.characterId]?.avatar !== key) throw Object.assign(new Error('角色已切换，正在重新读取。'), { code:'CHARACTER_CHANGED' });
+    const character = latest.characters[latest.characterId];
+    const filename = this.characterUtils?.getCharaFilename?.(latest.characterId);
+    const additional = this.worldInfo?.world_info?.charLore?.find(item => item.name === filename)?.extraBooks || [];
+    const available = new Set(latest.getWorldInfoNames());
+    const books = [...new Set([character.data?.extensions?.world, ...additional].filter(name => typeof name === 'string' && available.has(name)))];
+    return { key, name:character.name || '', books, rules:normalizeRegexRules(character.data?.extensions?.regex_scripts) };
+  }
+  onCharacterChange(callback) {
+    const c = this.getContext();
+    const names = ['CHAT_CHANGED','CHARACTER_EDITED','WORLDINFO_SETTINGS_UPDATED'].map(key => c.eventTypes[key]).filter(Boolean);
+    for (const name of names) c.eventSource.on(name, callback);
+    const off = () => { for (const name of names) c.eventSource.removeListener(name, callback); };
+    this.disposers.push(off); return off;
+  }
   async bookDetail(name) {
     const data = await this.getContext().loadWorldInfo(name);
     if (!data?.entries) throw new Error(`世界书「${name}」读取失败。`);
@@ -133,6 +159,7 @@ export class TavernHost {
     const latest = this.getContext();
     const selected = latest.characters.find(ch => ch.avatar === avatar);
     if (!selected) throw new Error('所选角色已变化，请刷新资料后重试。');
+    if (settings.bookCharacter && settings.bookCharacter !== avatar || latest.characters[latest.characterId]?.avatar !== avatar) throw new Error('读取期间角色已切换，请重新生成。');
     const d = selected.data || selected, character = { name: selected.name };
     for (const key of ['description', 'personality', 'scenario', 'mes_example', 'system_prompt']) character[key] = String(d[key] || selected[key] || '');
     const powers = latest.powerUserSettings;
@@ -159,7 +186,7 @@ export class TavernHost {
     if (settings.readContext && this.isMainBusy()) throw new Error('正文正在生成。请关闭读取正文上下文，或等待这一条正文完成后再取材。');
     const context = settings.readContext ? (latest.chat || []).filter(m => !m.is_system && typeof m.mes === 'string').slice(-settings.contextCount)
       .map(m => ({ role: m.is_user ? 'user' : 'assistant', content: m.mes })) : [];
-    return { character, characterIndex, persona, books, presetName: presetName || '', preset: applyPresetOverrides(preset, settings.presetOverrides?.[presetName], characterIndex), context, capturedAt: Date.now() };
+    return { character, characterKey:avatar, characterRegex:normalizeRegexRules(d.extensions?.regex_scripts), characterIndex, persona, books, presetName: presetName || '', preset: applyPresetOverrides(preset, settings.presetOverrides?.[presetName], characterIndex), context, capturedAt: Date.now() };
   }
   isMainBusy() {
     // Core truth also clears stale start events from commands / aborted preparation.

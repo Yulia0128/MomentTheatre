@@ -16,8 +16,9 @@ export function normalizeRegexRules(rules) {
   }));
 }
 export const defaultRegexSelection = rules => rules.filter(r => !r.disabled && r.placement.includes(2) && (!r.promptOnly || r.markdownOnly)).map(r => r.id);
-export function selectedRegexRules(detail, settings) {
-  const selection = Object.hasOwn(settings.regexPresets || {}, detail.name) ? settings.regexPresets[detail.name] : undefined;
+export function selectedRegexRules(detail, settings, field = 'regexPresets') {
+  const key = detail.key || detail.name;
+  const selection = Object.hasOwn(settings[field] || {}, key) ? settings[field][key] : undefined;
   const selected = selection?.selected ?? defaultRegexSelection(detail.rules);
   return detail.rules.filter(r => selected.includes(r.id)).map(r => ({ ...r, ...selection?.edits?.[r.id], disabled: false }));
 }

@@ -63,3 +63,5 @@ button:hover{background:transparent}.primary:hover{background:var(--ink);opacity
 .sticker-menu{position:fixed;inset:auto;margin:0;padding:4px;gap:0;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--ink);box-shadow:0 5px 24px #0002;font:inherit}
 .sticker-menu:popover-open{display:flex}.sticker-menu button{min-width:70px;min-height:40px;border:0;border-radius:5px;padding:8px 14px;white-space:nowrap}.sticker-menu button+button{border-left:1px solid var(--line);border-radius:0 5px 5px 0}
 @media(max-width:540px){.sticker-grid{gap:4px}}
+
+.category-create-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.category-create-row>.text-button{margin-left:auto;flex-shrink:0}.form-error{font-size:12px;border-left:2px solid currentColor;padding-left:10px}

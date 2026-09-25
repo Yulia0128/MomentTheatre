@@ -137,3 +137,21 @@
 小手机不应用正文预设正则；存在 <小手机> 区块时只解析区块内消息，外部任意 XML 不显示。旧无包裹行／JSON 兼容，但外围 XML 区块不当成消息；消息字段里的字面标签保留为转义文字。HTML 模式维持原隔离运行方式，不加入正文默认过滤。
 
 验证：单元测试覆盖原生读取接口参数、规则选择／修改、HTML 清理、捕获替换、默认过滤、原文／快照／备份及模式隔离；本地浏览器模拟宿主覆盖原生入口和生成。未连接用户云端真实预设或供应商，不能将模拟验证当作云端 API 验收。
+
+## 1.0.9 当前角色资料
+
+基于 SillyTavern 1.18.0 原生接口，无酒馆助手。读取前用 getContext().unshallowCharacter(String(characterId)) 补齐角色数据，按 avatar 校验异步读取期间是否换角。读取完成后若角色已切换，丢弃旧结果，避免旧世界书或正则覆盖新角色。
+
+| symbol / field | provenance | confidence / runtime_check |
+| --- | --- | --- |
+| characters[characterId].data.extensions.regex_scripts | [regex/engine.js 1.18.0](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions/regex/engine.js) getScriptsByType(SCOPED) | high；模拟读取、切换、原文保留已测 |
+| data.extensions.world、world_info.charLore[].extraBooks、getCharaFilename(characterId) | [world-info.js 1.18.0](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/world-info.js) getCharacterLore | high；主／附加关联与去重已测 |
+| eventTypes.CHAT_CHANGED、CHARACTER_EDITED、WORLDINFO_SETTINGS_UPDATED | [events.js 1.18.0](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/events.js)；通过上下文 eventSource 订阅 | high；切换事件和卸载清理已测 |
+
+附加世界书状态从原生 scripts/world-info.js 的导出读取，角色文件名通过 scripts/utils.js 的 getCharaFilename 获取，不写回这些模块。仅自动选择已在原生世界书列表中的有效绑定；尚未导入酒馆的卡片内嵌 character_book 不在本轮自动导入范围，不创建或改动酒馆源数据。
+
+世界书选择按角色 avatar 存储 selected／linked，首次进入自动选中关联，后续刷新保留手动取消；新增关联补选，已解除关联移除。初次切换到另一角色保留手动附加的非绑定书，不携带上一角色的自动绑定；再次进入角色恢复该角色选择。未打开角色时不会凭空选择书或规则。
+
+角色正则与预设正则采用独立设置，名称或规则 ID 相同不会混用编辑。阅读依次执行默认过滤→预设正则→角色正则，仅用于正文。角色规则沿用 1.0.8 的 HTML／CSS、宏和原文保留边界，不运行宿主脚本或修改宿主规则授权。角色与规则同时存入资料快照；续写使用原作品角色数据，继续补足沿用该节规则，旧作品不因换角改变。
+
+本轮通过本地宿主模拟，未连接用户实际云端 API。

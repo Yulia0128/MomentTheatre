@@ -5,7 +5,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.8';
+export const VERSION = '1.0.9';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -16,7 +16,7 @@ export const unique = values => [...new Set(values)];
 export const clamp = (value, min, max, fallback) => Number.isFinite(Number(value)) ? Math.min(max, Math.max(min, Number(value))) : fallback;
 export const DEFAULT_SETTINGS = Object.freeze({
   theme: 'day', apiMode: 'main', endpoint: '', model: '', character: '', persona: '', books: [], preset: '',
-  readContext: false, contextCount: 10, words: 5000, targetMessages: 50, maxTokens: 60000, stream: true, regexPresets: {},
+  readContext: false, contextCount: 10, words: 5000, targetMessages: 50, maxTokens: 60000, stream: true, regexPresets: {}, regexCharacters: {}, bookCharacter: '', characterBooks: {},
   proseTheme: 'prose-stamp', phoneTheme: 'phone-light', launcherEnabled: true, launcher: { x: null, y: null }, models: [], modelsEndpoint: '',
   personaMode: 'current', customPersonaName: '', customPersonaDescription: '', presetOverrides: {}, bookOverrides: {}, stickers: DEFAULT_STICKERS, stickerCatalogVersion: 1, stickerDraft: null,
 });
@@ -65,7 +65,9 @@ export function normalizeState(raw) {
   state.settings.theme = s.theme === 'night' ? 'night' : 'day';
   state.settings.apiMode = s.apiMode === 'independent' ? 'independent' : 'main';
   state.settings.books = strings(s.books);
-  state.settings.regexPresets = Object.fromEntries(Object.entries(s.regexPresets || {}).slice(0, 1000).map(([name, config]) => [name, {
+  state.settings.bookCharacter = text(s.bookCharacter, 2000);
+  state.settings.characterBooks = Object.fromEntries(Object.entries(s.characterBooks || {}).slice(0, 1000).map(([key, value]) => [key, { selected:strings(value?.selected), linked:strings(value?.linked) }]));
+  for (const field of ['regexPresets', 'regexCharacters']) state.settings[field] = Object.fromEntries(Object.entries(s[field] || {}).slice(0, 1000).map(([name, config]) => [name, {
     selected: strings(config.selected, 200),
     edits: Object.fromEntries(Object.entries(config.edits || {}).slice(0, 200).map(([key, rule]) => [key, normalizeRegexRules([{ ...rule, id: key }])[0]])),
   }]));
