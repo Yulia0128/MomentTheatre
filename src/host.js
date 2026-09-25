@@ -1,5 +1,6 @@
 import { clone, id } from './model.js';
 import { mountExtensionPanel } from './extension-panel.js';
+import { normalizeRegexRules } from './preset-regex.js';
 
 export function normalizeEndpoint(value) {
   let url;
@@ -105,6 +106,17 @@ export class TavernHost {
     const c = this.getContext();
     if (!c.powerUserSettings) throw new Error('当前面具资料尚未就绪，请稍后重试。');
     return { name: c.name1 || '我', description: String(c.powerUserSettings.persona_description || '') };
+  }
+  async presetRegexDetail(name) {
+    if (name === '__none__') return { name: '', rules: [] };
+    const manager = this.getContext().getPresetManager?.('openai');
+    const actual = name || manager?.getSelectedPresetName();
+    if (!actual || !manager) throw new Error('当前预设不存在或无法读取正则。');
+    // SillyTavern 1.18.0 preset-manager.js: explicit name avoids switching host presets.
+    const rules = typeof manager.readPresetExtensionField === 'function'
+      ? await manager.readPresetExtensionField({ name: actual, path: 'regex_scripts' })
+      : manager.getCompletionPresetByName?.(actual)?.extensions?.regex_scripts;
+    return { name: actual, rules: normalizeRegexRules(rules) };
   }
   async bookDetail(name) {
     const data = await this.getContext().loadWorldInfo(name);

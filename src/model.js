@@ -1,8 +1,11 @@
+import { normalizeStickers } from './phone-format.js';
+import { DEFAULT_STICKERS } from './default-stickers.js';
+import { normalizeRegexRules } from './preset-regex.js';
 import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, BUILTIN_THEMES, THEME_ALIASES, RETIRED_THEME_IDS } from './themes.js';
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.4';
+export const VERSION = '1.0.8';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -13,9 +16,9 @@ export const unique = values => [...new Set(values)];
 export const clamp = (value, min, max, fallback) => Number.isFinite(Number(value)) ? Math.min(max, Math.max(min, Number(value))) : fallback;
 export const DEFAULT_SETTINGS = Object.freeze({
   theme: 'day', apiMode: 'main', endpoint: '', model: '', character: '', persona: '', books: [], preset: '',
-  readContext: false, contextCount: 10, words: 2000, targetMessages: 20, maxTokens: 4096, stream: true,
+  readContext: false, contextCount: 10, words: 5000, targetMessages: 50, maxTokens: 60000, stream: true, regexPresets: {},
   proseTheme: 'prose-stamp', phoneTheme: 'phone-light', launcherEnabled: true, launcher: { x: null, y: null }, models: [], modelsEndpoint: '',
-  personaMode: 'current', customPersonaName: '', customPersonaDescription: '', presetOverrides: {}, bookOverrides: {},
+  personaMode: 'current', customPersonaName: '', customPersonaDescription: '', presetOverrides: {}, bookOverrides: {}, stickers: DEFAULT_STICKERS, stickerCatalogVersion: 1, stickerDraft: null,
 });
 export function emptyState() {
   return { schemaVersion: SCHEMA, themeCatalogVersion: 1, settings: clone(DEFAULT_SETTINGS), categories: [], stories: [], themes: [], errors: [], editorDraft: null, draft: { prompt: '', mode: 'prose' } };
@@ -25,14 +28,13 @@ export function newStory({ title, prompt, mode, themeId, snapshot }) {
     themeId, snapshot: clone(snapshot), chapters: [], categoryIds: [], tags: [], saved: false,
     continuationDraft: '', continuationMode: mode === 'html' ? '' : normalizeMode(mode), summaries: [], createdAt: Date.now(), updatedAt: Date.now() };
 }
-export function appendChapter(story, { content, instruction = '', complete = true, mode = story.mode, themeId = story.themeId, readingTheme = null, wordCount = 0, targetWords = 0, messageCount = 0, targetMessages = 0 }) {
+export function appendChapter(story, { content, instruction = '', complete = true, mode = story.mode, themeId = story.themeId, readingTheme = null, wordCount = 0, targetWords = 0, messageCount = 0, targetMessages = 0, sourceContent = '', readingRegex = [] }) {
   if (!text(content).trim()) throw new Error('没有可保存的生成内容。');
   if ((story.mode === 'html' || mode === 'html') && (story.mode !== 'html' || mode !== 'html' || story.chapters.length)) throw new Error('HTML 作品独立保存，不支持续写或混合章节。');
   const last = story.chapters.at(-1);
   if (last && !last.complete) throw new Error('请先整理未完成的最后一节，再继续续写。');
-  story.chapters.push({ id: id(), content: text(content), instruction: text(instruction), complete, mode, themeId, readingTheme: mode !== 'html' && readingTheme ? captureReadingTheme(readingTheme, mode) : null, wordCount, targetWords, messageCount, targetMessages, createdAt: Date.now() });
+  story.chapters.push({ id: id(), content: text(content), sourceContent: text(sourceContent), readingRegex: normalizeRegexRules(readingRegex), instruction: text(instruction), complete, mode, themeId, readingTheme: mode !== 'html' && readingTheme ? captureReadingTheme(readingTheme, mode) : null, wordCount, targetWords, messageCount, targetMessages, createdAt: Date.now() });
   story.continuationMode = mode === 'html' ? '' : mode;
-  if (complete) story.continuationDraft = '';
   story.updatedAt = Date.now();
   return story;
 }
@@ -63,6 +65,21 @@ export function normalizeState(raw) {
   state.settings.theme = s.theme === 'night' ? 'night' : 'day';
   state.settings.apiMode = s.apiMode === 'independent' ? 'independent' : 'main';
   state.settings.books = strings(s.books);
+  state.settings.regexPresets = Object.fromEntries(Object.entries(s.regexPresets || {}).slice(0, 1000).map(([name, config]) => [name, {
+    selected: strings(config.selected, 200),
+    edits: Object.fromEntries(Object.entries(config.edits || {}).slice(0, 200).map(([key, rule]) => [key, normalizeRegexRules([{ ...rule, id: key }])[0]])),
+  }]));
+  state.settings.stickers = normalizeStickers(s.stickers);
+  if (s.stickerCatalogVersion !== 1) {
+    const existing = new Set(state.settings.stickers.map(row => row.name.trim()));
+    state.settings.stickers.push(...clone(DEFAULT_STICKERS.filter(row => !existing.has(row.name))));
+  }
+  state.settings.stickerCatalogVersion = 1;
+  if (s.stickerDraft && typeof s.stickerDraft === 'object') {
+    const item = normalizeStickers([s.stickerDraft.item])[0];
+    const index = Number.isInteger(s.stickerDraft.index) && s.stickerDraft.index >= 0 && s.stickerDraft.index < state.settings.stickers.length ? s.stickerDraft.index : null;
+    state.settings.stickerDraft = { index, item };
+  }
   state.settings.personaMode = s.personaMode === 'custom' ? 'custom' : 'current';
   state.settings.customPersonaName = text(s.customPersonaName, 120);
   state.settings.customPersonaDescription = text(s.customPersonaDescription, 50000);
@@ -91,7 +108,7 @@ export function normalizeState(raw) {
   state.themes = list(raw.themes ?? [], 100, '主题').map(theme => validateTheme(theme));
   state.stories = list(raw.stories ?? [], 10000, '番外').map(s => {
     const key = safeId(s.id); assert(!storyIds.has(key), '番外标识重复。'); storyIds.add(key);
-    const chapters = list(s.chapters, 2000, '章节').map(c => ({ id: safeId(c.id), content: text(c.content), instruction: text(c.instruction), complete: c.complete !== false,
+    const chapters = list(s.chapters, 2000, '章节').map(c => ({ id: safeId(c.id), content: text(c.content), sourceContent: text(c.sourceContent), readingRegex: normalizeRegexRules(c.readingRegex), stickerSnapshot: normalizeStickers(c.stickerSnapshot), instruction: text(c.instruction), complete: c.complete !== false,
       mode: normalizeMode(c.mode || s.mode), themeId: text(c.themeId || s.themeId, 100), wordCount: Number(c.wordCount) || 0, targetWords: Number(c.targetWords) || 0,
       readingTheme: normalizeMode(c.mode || s.mode) === 'html' ? null : captureReadingTheme(c.readingTheme || (raw.themeCatalogVersion === 1 ? resolveTheme : resolveLegacyTheme)(state, normalizeMode(c.mode || s.mode), c.themeId || s.themeId), normalizeMode(c.mode || s.mode)),
       messageCount: Number(c.messageCount) || 0, targetMessages: Number(c.targetMessages) || 0, createdAt: Number(c.createdAt) || Date.now() }));

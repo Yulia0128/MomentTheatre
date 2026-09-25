@@ -9,6 +9,8 @@ export const PHONE_EXAMPLES = [
   { type: 'location', sender: 'char', time: '23:51', title: '临海街 · 雨歇咖啡', address: '虚拟定位 · 南岸路 18 号' },
   { type: 'share', sender: 'user', time: '23:51', title: '这家海边小店，藏着最好吃的早餐', description: '@慢慢生活的日记\n清晨七点，热汤与日出都刚刚好。', source: '生活手记 · 128 人分享' },
   { type: 'call', sender: 'char', time: '23:52' },
-  { type: 'video', sender: 'user', time: '23:52' },
+  { type: 'call', sender: 'user', time: '23:52', status: '已拒绝' },
+  { type: 'video', sender: 'char', time: '23:52', status: '发起' },
+  { type: 'video', sender: 'user', time: '23:52', status: '已接受' },
   { type: 'sticker', sender: 'char', time: '23:53', sticker: 'goodnight', text: '晚安小猫' },
 ];

@@ -9,5 +9,5 @@
     "fontSize": "14px",
     "lineHeight": "2"
   },
-  "css": ".prose-chapter { padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: 26px; line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; }"
+  "css": ".prose-chapter { padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: 26px; line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; } .preset-markup { max-width: 100%; overflow-wrap: anywhere; } .preset-markup img { max-width: 100%; height: auto; }"
 }

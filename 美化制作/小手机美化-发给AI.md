@@ -1,6 +1,6 @@
 # 瞬息 · 小手机美化制作提示词
 
-请为「瞬息 · 番外小剧场」制作一份可以直接导入的小手机阅读主题 JSON，适用于插件 1.0.0（主题格式兼容 0.8.0 起的版本）。请依照下面的真实格式和组件制作。
+请为「瞬息 · 番外小剧场」制作一份可以直接导入的小手机阅读主题 JSON，适用于插件 1.0.8（主题格式兼容 0.8.0 起的版本）。请依照下面的真实格式和组件制作。
 
 我的风格要求：【在这里填写想要的风格；可描述手机外壳、屏幕底色、双方气泡、头像形状、卡片和字体等。未指定的细节请自行搭配。】
 
@@ -28,7 +28,7 @@
     "bubble": "#FFFFFF",
     "ownBubble": "#DDE3D8"
   },
-  "css": ".phone { --avatar-size: 32px; --message-gap: 8px; background: #D5D6D1; border-color: #ACAEA6; box-shadow: inset 0 0 0 3px #ffffff80, 0 8px 22px #00000010; } .phone .message-avatar { border-radius: 50%; border: 1px solid #292a271a; } .phone .phone-header { font-family: inherit; border-bottom-color: #292a271f; } .phone .bubble { font-size: 14px; line-height: 1.7; } .phone .message[data-type=text] .bubble { border-radius: 12px 12px 12px 4px; } .phone .message.own[data-type=text] .bubble { border-radius: 12px 12px 4px 12px; } .phone .message-time { color: #6F736A; opacity: 1; } .phone .transfer-card { background: #B97842; color: #FFFFFF; } .phone .messages { scrollbar-color: #A5AA9D transparent; } .phone .messages::-webkit-scrollbar-thumb { background: #A5AA9D; border-radius: 8px; }"
+  "css": ".phone { --avatar-size: 32px; --message-gap: 8px; background: #D5D6D1; border-color: #ACAEA6; box-shadow: inset 0 0 0 3px #ffffff80, 0 8px 22px #00000010; } .phone .message-avatar { border-radius: 50%; border: 1px solid #292a271a; } .phone .phone-header { font-family: inherit; border-bottom-color: #292a271f; } .phone .bubble { font-size: 14px; line-height: 1.7; } .phone .message[data-type=text] .bubble { border-radius: 12px 12px 12px 4px; } .phone .message.own[data-type=text] .bubble { border-radius: 12px 12px 4px 12px; } .phone .message-time { color: #6F736A; opacity: 1; } .phone .transfer-card { background: #B97842; color: #FFFFFF; } .phone .messages { scrollbar-color: #A5AA9D transparent; } .phone .messages::-webkit-scrollbar-thumb { background: #A5AA9D; border-radius: 8px; } .phone .call-record { flex-wrap: wrap; line-height: 1.65; } .phone .transfer-main strong { font-variant-numeric: tabular-nums; } .phone .retracted-message, .phone .retract-original, .phone .retract-notice { font: inherit; } .phone .retract-notice { opacity: 0.55; } .phone .bubble { white-space: pre-wrap; overflow-wrap: anywhere; }"
 }
 ```
 
@@ -45,6 +45,8 @@
 部分消息组件有自己的字号、行高和颜色，单改 tokens 不会覆盖全部组件。需要调整时使用下列组件选择器，例如 `.phone .bubble`、`.phone .voice-transcript`。转账卡片默认是橙色，需通过 `.phone .transfer-card` 单独改色。
 
 ## 已有结构
+
+小手机没有作品标题或章节标题，只保留机身内居中的角色名。聊天内容采用逐行消息，兼容旧 JSON；主题仍是本页规定的 JSON。
 
 每节手机内容位于 `.phone-chapter`，里面有一台 `.phone`。手机的 `.phone-screen` 内，从上到下依次是状态栏 `.phone-status`、角色名标题栏 `.phone-header`、消息列表 `.messages`、装饰输入栏 `.phone-footer`、底部横条 `.phone-home`。
 
@@ -88,7 +90,7 @@ CSS 已被插件限制在当前章节内部。请直接写下面的选择器，�
 | `sticker` | `.sticker-built-in`、`.sticker-image`、`.sticker-fallback` | 内置表情、图片表情或文字占位；保留图像比例与透明区域 |
 | `location` | `.location-card`、`.location-caption`、`.location-caption strong`、`.location-caption small`、`.virtual-map` | 虚拟地点、地址、虚拟地图与定位标志；不请求真实地图 |
 | `share` | `.share-card`、`.share-card strong`、`.share-description`、`.share-thumbnail`、`.share-source` | 原帖标题、简述、缩略图或占位、来源 |
-| `call`、`video` | `.call-record`；也可通过 `.message[data-type=call]`、`.message[data-type=video]` 区分 | 发起语音／视频通话的记录，只展示提示 |
+| `call`、`video` | `.call-record`；也可通过 `.message[data-type=call]`、`.message[data-type=video]` 区分 | 发起、已接受、已拒绝、已结束等语音／视频通话记录；回应在响应者自己的气泡中 |
 
 语音的 `.voice-closed` 和 `.voice-open` 已由 `.voice[open]` 控制显隐，不要改成始终隐藏或始终显示；保留可点击的 `.voice-bar`，不要用伪元素遮挡它。
 
@@ -161,3 +163,17 @@ CSS 已被插件限制在当前章节内部。请直接写下面的选择器，�
 - 检查实际交付文件，而非仅检查生成前的对象。文件应可直接由 JSON.parse 解析，再符合本框架的主题约束。
 
 输出前自行检查：合法 JSON、`mode` 为 `phone`、字段和值符合约束、所有消息类型仍能正常显示、语音转写能展开、消息仍在机身内部滚动、外部背景透明。然后只返回最终 JSON。
+
+## 1.0.7 消息约定
+
+- 默认有 21 条表情，每排 10 个缩略图；点击修改或删除，弹窗填写三字段并保存。表情映射在设置的「小手机表情包」管理，不写入主题 JSON；AI 选择名字，插件固定图片地址。主题仍只负责 `.sticker-image` 的样式。
+- 转账只写数字金额与备注，框架补￥和待收款。旧 JSON 数字／字符串金额兼容；无效金额不展示占位文案，原文保留。
+- 语音转写只放实际发言，不写动作、神态或旁白。
+- 撤回适用于全部手机主题：`.retracted-message` 内含 `.retract-notice` 提示和 `.retract-original` 原文。提示和原文的字号必须继承普通消息，不另设较大字号。
+- 语音／视频通话可显示发起、已接受、已拒绝、已结束、未接听等状态；沿用 `.call-record`，不隐藏状态文字。
+
+## 内容与外观的边界（1.0.7）
+
+编辑框保存完整回复，包括 think／CoT、草稿、作家对话及头尾文本；不另外显示原始回复栏。插件从文本提取有效消息生成组件，渲染结果不回写编辑内容。主题 JSON 只改变这些组件的 CSS，不能清理或改写存储文本；自制导入主题也沿用相同消息变量、类型和选择器，不另造匹配格式。￥、待收款、接受／拒绝和撤回提示由组件按消息字段显示。不要用 CSS 伪元素替换用户实际内容。
+
+优先只渲染 <小手机> 区块，忽略外部 XML；无区块时兼容旧消息格式并跳过外围 XML。预设正则仅作用于正文，不影响小手机的解析和完整编辑原文。图库在 API 之后、数据之前；缩略图横向菜单左编辑右删除，删除需再次确认。新增入口始终叫添加表情包。

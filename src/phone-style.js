@@ -47,5 +47,6 @@ body.phone-reader,.phone-chapter{background:transparent!important}
 .share-description>span:first-child{flex:1;min-width:0}.share-description>img,.share-thumbnail{width:44px;height:44px;object-fit:cover;flex-shrink:0;border-radius:5px}
 .share-thumbnail{display:grid;place-items:center;background:#8881}.share-source{display:flex;align-items:center;gap:5px;border-top:1px solid #8882;padding:6px 0;font-size:10px;opacity:.6}
 .share-source>svg{width:13px;height:13px}.call-record{display:flex;align-items:center;gap:8px;font-size:13px}.call-record>svg{width:18px;height:18px}
+.retracted-message{display:flex;flex-direction:column;gap:6px;font:inherit}.retract-notice{font:inherit;opacity:.55}.retract-original{font:inherit;white-space:pre-wrap}
 @media(max-width:300px){.transfer-main{gap:7px;padding:12px 10px 8px}.transfer-main>svg{width:24px;height:24px}.transfer-main strong{font-size:16px}.share-description{gap:6px}.share-description>img,.share-thumbnail{width:32px;height:32px}}
 `;

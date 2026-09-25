@@ -93,3 +93,47 @@
 首轮要求正文输出独立标题标记、小手机顶层 title、HTML 的 title；缺少标题时使用小请求根据作品拟题，不截取用户指令。标题不计入字数。补写按当前章节实际字数／条数推进，成功达到目标才标记完整；空回与可识别的传输故障最多连续重试两次，HTTP 429 等真实接口错误保留并暂停。无进展或单次 50 次请求保护时暂停，支持刷新后继续补足同一节。
 
 未点击保存的作品依然写入本地草稿与备份，但不进入分类或按分类导出。生成和美化页面切换后保留已连接的阅读 iframe；公共图片／字体按需无凭据读取并缓存在独立 IndexedDB，不进入作品备份。缓存最多约 64 MB，有效期 7 天。跨域失败等情况仍使用原资源地址，不绕过资源服务器的访问控制。
+
+## 1.0.5 正则过滤核实（历史记录，接入见 1.0.8）
+
+原生前端扩展可以用 JavaScript 正则处理自己收到的文本，不需要 Tavern Helper。官方 Regex 文档也说明了匹配替换、AI Response／Reasoning 范围和仅显示／出站提示词等选项：https://docs.sillytavern.app/extensions/regex/ 。
+
+瞬息通过自己的生成与隔离阅读流程运行，因此不能假定酒馆聊天显示正则会自动处理瞬息的 API 回复或 iframe。若后续启用 think 过滤，应在瞬息自己的响应处理层接入；明确仅隐藏显示还是也从保存、统计、续写上下文中排除，并处理流式未闭合标签。本轮只验证可行性，不调用或修改宿主正则，不新增过滤开关。此结论不等于已在用户 1.18.0 云端实测宿主 regex 内部函数。
+
+## 1.0.6 小手机独立匹配框架
+
+使用本扩展内置 JavaScript 标签匹配与消息解析，不导入或修改酒馆正则设置，也不需要酒馆助手。优先提取 <小手机>...</小手机>；外部 think/cot 即使未闭合也不占用手机框架。缺失手机闭合标签时读取至后续 think/cot 开始或回复结尾。旧无标签格式仍兼容，完整 think/cot 和末尾未闭合思考块排除。只影响小手机读取，正文／HTML 不开启通用思维链过滤。
+
+清理后的有效消息用于渲染、计数、续写和总结；sourceContent 保留原始回复。失败草稿可能保留原始片段，继续补足时重新解析消息；不执行模型提供的 HTML/JS。匹配结果通过转义的固定组件渲染。
+
+## 1.0.7 预设正则只读核实（历史记录，接入见下节）
+
+目标版本为用户提供的 SillyTavern 1.18.0，使用原生扩展上下文，无 Tavern Helper 依赖。
+
+| symbol | surface / applies_to | provenance | confidence / runtime_check |
+| --- | --- | --- | --- |
+| getScriptsByType(SCRIPT_TYPES.PRESET, { allowedOnly: true }) | core Regex extension 1.18.0 | [regex/engine.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions/regex/engine.js) | high：读取当前预设的 regex_scripts，并可检查该预设启用授权；本轮只读源码，未调用用户运行环境 |
+| getPresetManager('openai').readPresetExtensionField({ name, path: 'regex_scripts' }) | core preset manager 1.18.0 | [preset-manager.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/preset-manager.js) | high：可按指定名称读取预设附带正则，不必切换当前预设；当前预设读取设置对象，其他预设读取保存的扩展字段。用户云端能力探测仍待实施 |
+| getRegexedString(rawString, placement, { isMarkdown, isPrompt, isEdit, depth }) | core Regex extension 1.18.0 | [regex/engine.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions/regex/engine.js) | high：会读取当前宿主全局、当前预设及角色规则，并按 placement、markdownOnly、promptOnly、disabled、深度等条件处理；不能直接当作“瞬息选定预设的过滤器” |
+
+结论：能读取预设内实际附带的正则，包括用户额外配置的草稿／作家对话匹配规则，但预设文本只有“输出草稿”等要求时，无法凭空推导对应过滤规则。读取、允许使用、实际匹配成功是三件不同的事。后续若接入，应只在瞬息的阅读副本上运行选定范围内的规则，尊重禁用与适用范围；不能清理覆盖保存文本，不写回宿主规则，也不能假定酒馆当前预设与瞬息选定预设相同。本轮未增加任何宿主正则调用或修改。
+
+现有过滤范围：小手机优先读取 `<小手机>` 块，外部内容不参与消息显示；无该块时兼容旧消息格式并排除 think／cot。区块内仍只识别约定的消息类型，语音转文字会去掉括号／星号动作标记。未实现任意命名的草稿／作家对话规则，正文／HTML 也没有通用思考过滤。
+
+编辑界面只显示一个完整文本框。生成回复原文可编辑；旧无标签的分轮回复增加小手机边界以便与后续标签格式合并。保存编辑不重新序列化或删掉其他文本，原文进入持久化与备份，消息解析用于阅读、计数及现有的手机续写／总结引用。导入阅读主题只改变 CSS，不改变这条保存规则。
+
+## 1.0.8 所选预设正则与正文阅读副本
+
+用户已明确要求接入。通过 `getPresetManager('openai').readPresetExtensionField({name, path: 'regex_scripts'})` 读取瞬息所选预设；选“使用当前已保存预设”才采用宿主当前名称，选“不采用预设”返回空列表。不混入全局或角色正则，不调用会汇总这些规则的 `getRegexedString`，不切换预设、不写回宿主。接口缺失时仅兼容读取该预设的 `extensions.regex_scripts` 字段。
+
+多选列表按预设保存选择与本地编辑。首次默认选择源数据中启用、适用于 AI 回复且非仅提示词的规则；用户可主动勾选其他条目，只作为瞬息正文显示规则使用。源 placement、markdownOnly、promptOnly、runOnEdit、深度等在详情里保留为来源信息，不复刻宿主聊天楼层、提示词处理及全局启用授权逻辑。选择规则不会改变发给模型的消息。
+
+正文阅读先移除大小写不敏感的 think／thinking／cot 标签块和多行 HTML 注释，再顺序匹配所选正则。未闭合的默认思考／注释块隐藏至结尾。支持裸表达式和 /pattern/flags、编号与命名捕获、$0、$&、{{match}}、trimStrings；宏只支持 char、user、newline、noop，并处理 substituteRegex 的替换／转义模式。不执行 EJS、变量脚本或其他未知宏；不声称完整兼容复杂预设生态。无效规则只记录并显示错误，其他规则与原文保留。
+
+正则替换产生的 HTML 用 sanitize-html 白名单清理，CSS 经 css-tree 检查并限定到各自 `.preset-markup[data-regex-block]`；支持常见文首卡片、图片、字体和布局，不执行 JavaScript、事件处理器、iframe、表单或外部 CSS 导入。模型未经过规则转换的 HTML 仍转义成文字。阅读 iframe 和独立正文导出均使用相同的无脚本内容安全策略。第三方依赖已内置，不需酒馆服务器安装 npm 包；本地重建依赖需 Node 22.12 及以上。
+
+正文 sourceContent 保留完整生成回复（含标题标签、草稿与思考），正文编辑保存后 content 直接保存完整输入，显示由规则派生，过滤不改持久化或备份。现有生成字数／续写／总结逻辑未改为“过滤后内容”。章节保存 readingRegex 快照，后续改规则不重写旧作品；升级前已丢失的原文无法补回。
+
+小手机不应用正文预设正则；存在 <小手机> 区块时只解析区块内消息，外部任意 XML 不显示。旧无包裹行／JSON 兼容，但外围 XML 区块不当成消息；消息字段里的字面标签保留为转义文字。HTML 模式维持原隔离运行方式，不加入正文默认过滤。
+
+验证：单元测试覆盖原生读取接口参数、规则选择／修改、HTML 清理、捕获替换、默认过滤、原文／快照／备份及模式隔离；本地浏览器模拟宿主覆盖原生入口和生成。未连接用户云端真实预设或供应商，不能将模拟验证当作云端 API 验收。

@@ -1,3 +1,4 @@
+import { phonePrompt, parsePhoneReport, serializePhone } from './phone-format.js';
 import { HTML_PROMPT } from './html-work.js';
 import { expandPrompt, macroContext } from './prompt-macros.js';
 import { shouldTrigger, promptRole, injectHistory } from './prompt-injection.js';
@@ -54,11 +55,11 @@ export function selectWorldEntries(books, corpus, snapshot, macros = macroContex
   }
   return selected.sort((a, b) => b.order - a.order);
 }
-export function buildMessages({ snapshot, prompt, mode, chapters = [], instruction = '', words = 2000, targetMessages = 20, summary = null, maxInputChars = 60000 }) {
+export function buildMessages({ snapshot, prompt, mode, chapters = [], instruction = '', words = 5000, targetMessages = 50, summary = null, stickers = [], allowRetract = false, maxInputChars = 60000 }) {
   if (!snapshot) throw new Error('这篇番外缺少人物资料，请重新选择资料后创建。');
   const macros = macroContext();
   const c = snapshot.character || {}, u = snapshot.persona || {};
-  const reference = chapters.slice(summary?.through || 0);
+  const reference = chapters.slice(summary?.through || 0).map(chapter => chapter.mode === 'phone' ? { ...chapter, content: serializePhone(parsePhoneReport(chapter.content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) } : chapter);
   if (reference.length > 10) throw new Error('前文尚未完成剧情总结。');
   const initial = expand(prompt, snapshot, macros);
   const continuation = expand(instruction, snapshot, macros);
@@ -121,13 +122,13 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
   else messages.push(...injectedHistory);
   if (mode === 'html' && chapters.length) throw new Error('HTML 作品不支持续写。');
   const format = mode === 'html' ? HTML_PROMPT : mode === 'phone'
-    ? '输出纯 JSON，统一结构为 {"messages":[{"type":"text","sender":"char","time":"23:48","text":"内容"}]}。messages 每个对象是一条消息，必须有且只有一个 type；sender 为 user、char 或 system。时间写在消息的 time 字段，不单独输出 type:time，不输出 name。type 为 text（纯文字）、voice（语音，text 转写、duration 时长）、transfer（amount 金额、status 状态、text 备注）、image（url 图床地址或 text 图片描述）、sticker（url 图床或 sticker 内置标识 happy/hug/blush/goodnight）、call（发起语音通话）、video（发起视频通话）、location（title 虚拟地点、address 虚拟地址）、share（title 原帖标题、description 简介、source 来源、thumbnail 可选缩略图）。不虚构图床 URL，无素材使用描述或内置表情。不得输出代码围栏或说明。'
+    ? phonePrompt(stickers, allowRetract)
     : '输出可直接阅读的正文，用自然段落，不输出章节编号、创作说明或 HTML。发言使用成对引号；按文意可使用 **加粗**、*斜体*、~~删除线~~，无需刻意凑齐格式。';
-  const target = mode === 'phone' ? `至少 ${targetMessages} 条消息（按 messages 中的消息对象计数，每条一个 type，不按字数）` : `至少 ${words} 字`;
+  const target = mode === 'phone' ? `至少 ${targetMessages} 条消息（按有效消息行计数，不按字数）` : `至少 ${words} 字`;
   messages.push({ role: 'user', content: mode === 'html' ? format : chapters.length
     ? `根据以上番外续写第 ${chapters.length + 1} 节，不重复上文。本节${target}。${continuation ? `本次要求：${continuation}` : '请自然接续。'}\n${format}`
     : `现在生成第一节，${target}。\n${format}` });
-  if (!chapters.length) messages.at(-1).content += '\n必须根据故事内容拟定一个独立标题，语气随番外氛围变化：喜剧可跳脱，酸涩或严肃故事用克制的标题。不得把用户指令当标题。' + (mode === 'html' ? '标题放在完整 HTML 的 <title> 中。' : mode === 'phone' ? '在 JSON 顶层添加 title 字符串，messages 结构不变。' : '首行严格写 <shunxi-title>你的标题</shunxi-title>，换行后开始正文，正文不重复标题；标题不计入目标字数。');
+  if (mode !== 'phone' && !chapters.some(ch => (ch.mode || 'prose') === 'prose')) messages.at(-1).content += '\n必须根据故事内容拟定一个独立标题，语气随番外氛围变化：喜剧可跳脱，酸涩或严肃故事用克制的标题。不得把用户指令当标题。' + (mode === 'html' ? '标题放在完整 HTML 的 <title> 中。' : '首行严格写 <shunxi-title>你的标题</shunxi-title>，换行后开始正文，正文不重复标题；标题不计入目标字数。');
   const chars = messages.reduce((n, m) => n + m.content.length, 0);
   if (chars > maxInputChars) throw new Error(`本次输入约 ${chars} 字符，超过设置的 ${maxInputChars} 字符上限。`);
   Object.defineProperty(messages, 'warnings', { value: [...macros.warnings] });

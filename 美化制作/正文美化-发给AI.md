@@ -1,6 +1,6 @@
 # 瞬息 · 正文美化制作提示词
 
-请为「瞬息 · 番外小剧场」制作一份可以直接导入的正文阅读主题 JSON，适用于插件 1.0.0（主题格式兼容 0.8.0 起的版本）。请依照下面的真实格式和组件制作。
+请为「瞬息 · 番外小剧场」制作一份可以直接导入的正文阅读主题 JSON，适用于插件 1.0.8（主题格式兼容 0.8.0 起的版本）。请依照下面的真实格式和组件制作。
 
 我的风格要求：【在这里填写想要的风格；可描述配色、字体、纸张质感、留白、缩进等。未指定的细节请自行搭配。】
 
@@ -26,7 +26,7 @@
     "fontSize": "14px",
     "lineHeight": "2"
   },
-  "css": ".prose-chapter { padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: 26px; line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; }"
+  "css": ".prose-chapter { padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: 26px; line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; } .preset-markup { max-width: 100%; overflow-wrap: anywhere; } .preset-markup img { max-width: 100%; height: auto; }"
 }
 ```
 
@@ -144,3 +144,9 @@
 - 标题使用实际 .prose-title，不从正文首段猜测标题。标题与顶部贴图分开，标题位于贴图下方。不得添加“阅读预览”等固定副标题或章节编号。
 - 所有正文主题预览统一使用 以下示例：标题“这是标题。”；正文依次为“这是引号文字。”、加粗的“这是加粗文字。”、斜体的“这是斜体文字。”、删除线的“这是删除文字。”、普通无格式的“这是一大段正文正文正文正文正文正文”。不要添加格式名称标签、主题名标题或额外故事。
 - 修改既有主题保留原有装饰；邮票素笺的灰色虚线固定在实际标题下方，不能依赖第一段加粗文本。
+
+## 1.0.8 预设正则与完整原文
+
+正文阅读先隐藏 think／thinking／cot 标签块和 HTML 注释（不区分大小写），再按顺序应用该章节保存的预设正则。规则生成的 HTML／CSS 位于 `.preset-markup[data-regex-block]` 中，样式限制在自身区块内；可呈现文首卡片、图片等，不运行 JavaScript、iframe 或表单。未经过规则替换的模型 HTML 仍显示为文本。
+
+主题只调整外观，不负责解析或删除原文。编辑框保留 AI 原始回复，包括思考、草稿、注释和标题标签；保存编辑后重新派生阅读显示。规则与主题一同保存章节快照，切换预设或修改规则不重写旧章节。不要隐藏整个 `.preset-markup`，否则会连文首美化一起隐藏。

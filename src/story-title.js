@@ -1,11 +1,9 @@
 export function extractTitle(raw, mode = 'prose') {
   const text = String(raw || '');
   if (mode === 'html') return { title: text.match(/<title\b[^>]*>([^<]+)<\/title>/i)?.[1]?.trim().slice(0, 80) || '', content: text };
-  if (mode === 'phone') {
-    try { const data = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); return { title: typeof data.title === 'string' ? data.title.trim().slice(0, 80) : '', content: text }; } catch { return { title: '', content: text }; }
-  }
-  const match = text.match(/^\s*<shunxi-title>([^\n]*?)<\/shunxi-title>\s*/i);
-  if (match) return { title: match[1].trim().slice(0, 80), content: text.slice(match[0].length) };
+  if (mode === 'phone') return { title: '', content: text };
+  const match = text.match(/<shunxi-title>([^\n]*?)<\/shunxi-title>\s*/i);
+  if (match) return { title: match[1].trim().slice(0, 80), content: text.slice(0, match.index) + text.slice(match.index + match[0].length) };
   // Do not display a half-received title tag during streaming.
   if (/^\s*<shunxi-title>/i.test(text) || /^\s*<shunxi(?:-title)?$/i.test(text)) return { title: '', content: '' };
   const heading = text.match(/^\s*#\s+([^\n]+)\n+/);
