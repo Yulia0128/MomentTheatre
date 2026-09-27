@@ -1,12 +1,16 @@
+export const isPlaceholderTitle = title => /^(?:你的标题|标题|实际标题|在此填写标题|未命名番外)$/.test(String(title || '').trim());
+const visibleTitleText = text => text.replace(/<(think|thinking|cot)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)|<!--[\s\S]*?(?:-->|$)/gi, value => value.replace(/[^\r\n]/g, ' '));
 export function extractTitle(raw, mode = 'prose') {
   const text = String(raw || '');
   if (mode === 'html') return { title: text.match(/<title\b[^>]*>([^<]+)<\/title>/i)?.[1]?.trim().slice(0, 80) || '', content: text };
   if (mode === 'phone') return { title: '', content: text };
-  const match = text.match(/<shunxi-title>([^\n]*?)<\/shunxi-title>\s*/i);
-  if (match) return { title: match[1].trim().slice(0, 80), content: text.slice(0, match.index) + text.slice(match.index + match[0].length) };
+  const visible = visibleTitleText(text);
+  const titles = [...visible.matchAll(/<shunxi-title>\s*([^<]*?)\s*<\/shunxi-title>\s*/gi)];
+  const match = titles.find(item => item[1].trim() && !isPlaceholderTitle(item[1]));
+  if (match || titles.length) return { title: match?.[1].trim().slice(0, 80) || '', content: text.replace(/<shunxi-title>[^<]*?<\/shunxi-title>\s*/gi, '') };
   // Do not display a half-received title tag during streaming.
   if (/^\s*<shunxi-title>/i.test(text) || /^\s*<shunxi(?:-title)?$/i.test(text)) return { title: '', content: '' };
-  const heading = text.match(/^\s*#\s+([^\n]+)\n+/);
+  const heading = visible.match(/^\s*#\s+([^\n]+)\n+/);
   return heading ? { title: heading[1].trim().slice(0, 80), content: text.slice(heading[0].length) } : { title: '', content: text };
 }
 export async function generateTitle({ host, settings, snapshot, prompt, content, signal }) {
@@ -14,6 +18,14 @@ export async function generateTitle({ host, settings, snapshot, prompt, content,
     { role: 'user', content: `设定：${prompt.slice(0, 3000)}\n作品：${content.slice(0, 12000)}` }];
   const raw = await host.generate({ messages, settings: { ...settings, maxTokens: 256 }, snapshot, signal });
   const title = String(raw || '').trim().replace(/^(?:#+\s*|标题[：:]\s*)/, '').replace(/^[《“"]|[》”"]$/g, '').trim();
-  if (!title || /[\r\n]/.test(title) || title.length > 80 || /^<none>$/i.test(title)) throw Object.assign(new Error('模型未返回有效标题，内容已保留，可在编辑中修改标题。'), { code: 'TITLE_MISSING' });
+  if (!title || isPlaceholderTitle(title) || /[\r\n]/.test(title) || title.length > 80 || /^<none>$/i.test(title)) throw Object.assign(new Error('模型未返回有效标题，内容已保留，可在编辑中修改标题。'), { code: 'TITLE_MISSING' });
   return title;
+}
+
+export function recoverStoryTitle(story) {
+  if (story.mode === 'phone' && !story.chapters?.some(ch => ch.mode === 'prose') || !isPlaceholderTitle(story.title)) return story;
+  const chapter = story.chapters?.find(ch => (ch.mode || story.mode) === 'prose');
+  const recovered = chapter && extractTitle(chapter.sourceContent || chapter.content).title;
+  if (recovered) story.title = recovered;
+  return story;
 }

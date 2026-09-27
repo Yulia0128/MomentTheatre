@@ -169,3 +169,23 @@
 静态规则的文首与文末现在合并后再清理，可共同围住中间正文；同章节静态规则共享样式区块。非流式的生成及补写只显示等待状态，收到的原文照常用于恢复，完成后才进入阅读。
 
 跨设备仅核实：现有 LibraryStore 是每浏览器 IndexedDB（账号隔离），同一服务器／IP 并不共享其数据库。SillyTavern 1.18.0 有按账号持久化服务器设置的接口，可以据此设计独立资料存储与同步，但需另行实现拉取、写入和冲突处理；本版没有改动存储。参考官方 src/endpoints/settings.js 与 public/scripts/st-context.js。
+
+
+## 1.0.11 手动跨设备合并（用户后续授权）
+
+覆盖上面的仅调研状态。本版使用 SillyTavern 1.18.0 原生文件接口，不需要服务器插件、额外端口、外部同步服务或酒馆助手。PM2／Docker／命令行使用同一套 HTTP 接口，Docker 的数据持久挂载仍由部署配置决定。
+
+| symbol | surface / applies_to | provenance | confidence / runtime_check |
+| --- | --- | --- | --- |
+| POST /api/files/upload {name,data}，data 为 UTF-8 文件的 base64 | native core / 1.18.0 | [src/endpoints/files.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/src/endpoints/files.js) | high；源码核实与模拟浏览器测试，真实云端待用户验收 |
+| POST /api/files/verify {urls} | native core / 1.18.0 | 同上 | high；区分文件不存在与读取异常 |
+| GET /user/files/:filename | authenticated account / 1.18.0 | [src/users.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/src/users.js) | high；按当前登录账号目录读取 |
+| getContext().getRequestHeaders() | core context / 1.18.0 | [public/scripts/st-context.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js) | high；POST 沿用原生认证／CSRF 头 |
+
+索引为 momenttheatre-sync-v1.json，独立快照为 momenttheatre-sync-随机标识.json，位于当前用户 user/files 目录。文件名严格限制，不接受外部地址或路径跳转，不调用删除接口。快照上限 50 MB，SHA-256 校验完整性（支持普通 HTTP，不依赖 crypto.subtle；不是加密或签名）。完整版本化结构检查防止标准化静默丢弃字段、实体或超长文本。
+
+上传：读取远端→三方合并→本地保存恢复快照及合并结果→上传独立快照→回读验证→重新检查索引→写索引→回读核验。下载只读取并合并到本机。最近合并基线留在本机元数据，不进入全量备份；恢复备份清除基线。原文、章节主题及规则快照、未保存作品均可同步；未提交章节编辑／表情表单不共享。
+
+原生接口只保证单次文件原子替换，没有 CAS 或跨设备锁。前后校验只能发现可观测竞争，最后写入窗口仍可能让索引指向最后上传者；双方独立快照和本机内容保留。请逐台同步，遇到同时上传后再次逐台合并。索引记录最近 5 个前序文件名，更早文件仍保留，不自动清理。维护恢复时可从该账号 user/files 取出快照中的 state 对象，存为 JSON 后通过恢复备份导入；先备份现有数据，不误删聊天附件。
+
+验证覆盖两端冲突、反复同步、删除与修改、空库、损坏文件、上传中断、索引竞争、事务中断与旧页面冲突。两个独立浏览器上下文模拟电脑／手机和原生接口；未连接用户真实云端，不能称为实机同步验收。

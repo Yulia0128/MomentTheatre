@@ -1,3 +1,4 @@
+import { ServerLibrary } from './sync-remote.js';
 import { clone, id } from './model.js';
 import { mountExtensionPanel } from './extension-panel.js';
 import { normalizeRegexRules } from './preset-regex.js';
@@ -62,6 +63,7 @@ export class TavernHost {
     this.worldInfo = await import(new URL('../../../world-info.js', this.extensionUrl).href);
     this.characterUtils = await import(new URL('../../../utils.js', this.extensionUrl).href);
   }
+  libraryRemote() { return new ServerLibrary(() => this.getContext().getRequestHeaders()); }
   getKey() { try { const saved = localStorage.getItem(this.sessionKey); if (saved) return saved; const previous = sessionStorage.getItem(this.sessionKey) || ''; if (previous) this.setKey(previous); return previous; } catch { return ''; } }
   setKey(key) { try { if (key) localStorage.setItem(this.sessionKey, key); else localStorage.removeItem(this.sessionKey); sessionStorage.removeItem(this.sessionKey); } catch { throw new Error('无法保存密钥，请检查浏览器存储权限。'); } }
   mountSettingsPanel(controller) { return mountExtensionPanel(controller); }

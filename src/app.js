@@ -1,3 +1,4 @@
+import { LibrarySync, sharedState, applyShared, equalSync } from './library-sync.js';
 import { readerToken } from './regex-card.js';
 import { syncCharacterBooks } from './character-sources.js';
 import { ReaderAssets } from './reader-assets.js';
@@ -78,6 +79,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const filterObserver = new ResizeObserver(entries => {
     for (const entry of entries) filterLayouts.get(entry.target)?.(entry.contentRect.width);
   });
+  let sync = null;
   let saveTimer, noticeTimer, unread = false, disposed = false, busyAction = false;
   let generationError = null, nativePanel = null, refreshRegexOptions = () => {}, catalogRequest = 0;
   const readingWarnings = new Set(), readerTokens = new WeakMap();
@@ -726,6 +728,27 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     draw();
     return el('section', { class: 'settings-group sticker-library' }, el('div', { class: 'page-heading' }, el('h2', {}, '小手机表情包'), add), grid);
   }
+  function syncCopies() {
+    let pop;
+    const copies=state.stories.filter(story=>story.syncConflict);
+    pop=popup('同步保留的副本',el('div',{},copies.length?copies.map(story=>el('div',{class:'actions'},el('span',{},story.title),button('查看',()=>{
+      if(!story.chapters.length){popup('保留的番外设定',label('番外设定',el('textarea',{rows:10,value:story.prompt,readonly:true})));return;}
+      pop.close();storyId=story.id;chapterIndex=0;tab='generate';render();
+    }))):el('p',{},'目前没有需要查看的副本。')));
+  }
+  function syncPanel() {
+    const recovery=()=>action(async()=>{
+      const saved=await store.syncRecovery();
+      if(!saved){notify('还没有同步前备份。');return;}
+      download(backup(saved),`瞬息-同步前备份-${Date.now()}.json`,'application/json');
+    });
+    return el('div',{},
+      el('p',{class:'muted'},preview?'预览中的上传／下载使用本页临时模拟资料，不连接酒馆服务器。':'同一酒馆服务器、同一账号可手动合并作品、分类、美化、表情和设置；API 密钥仍在每台设备单独填写。'),
+      el('p',{class:'muted'},'请逐台同步，避免同时上传。同篇冲突保留副本；删除不随同步传播，另一设备保留的内容可能重新出现。'),
+      el('p',{'data-sync-status':true,role:'status'},sync?.status.text||'当前环境暂不能连接同步服务。'),
+      el('div',{class:'actions'},button('上传到服务器',()=>sync?.run('upload'),{disabled:!sync}),button('从服务器下载',()=>sync?.run('download'),{disabled:!sync}),button('查看保留的副本',syncCopies),button('下载同步前备份',recovery)),
+      el('p',{class:'muted'},'请养成定期备份的习惯，重要修改前建议先备份全部资料。'));
+  }
   function settingsPage() {
     const s = state.settings;
     const update = (key, value) => { s[key] = value; scheduleSave(); };
@@ -774,7 +797,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       confirm('恢复备份', `将替换当前资料库为 ${incoming.stories.length} 篇番外、${incoming.categories.length} 个分类。恢复前会自动下载当前备份。`, async () => {
         if (task) throw new Error('请先停止生成再恢复备份。');
         download(backup(state), `瞬息-恢复前备份-${Date.now()}.json`, 'application/json');
-        await store.save(incoming); state = incoming; storyId = state.stories[0]?.id || null; root.dataset.theme = state.settings.theme; launcher.hidden = !state.settings.launcherEnabled; nativePanel?.sync(state.settings.launcherEnabled); render(); notify('备份已恢复。');
+        await store.save(incoming,{syncMeta:null}); state = incoming; storyId = state.stories[0]?.id || null; root.dataset.theme = state.settings.theme; launcher.hidden = !state.settings.launcherEnabled; nativePanel?.sync(state.settings.launcherEnabled); render(); notify('备份已恢复。');
       });
     }) });
     return el('section', { class: 'page settings-page' }, el('div', { class: 'page-heading' }, el('h1', {}, '设置'), button('刷新酒馆资料', () => refreshCatalog(), { class: 'text-button' })),
@@ -790,10 +813,10 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'parameter-pair reply-parameters' }, settingNumber('最大回复token', 'maxTokens', 128, 200000), el('label', { class: 'stream-setting' }, el('input', { type: 'checkbox', checked: s.stream, onChange: e => update('stream', e.target.checked) }), el('span', {}, '流式传输')))),
       el('section', { class: 'settings-group' }, el('h2', {}, 'API'), dropdownField('生成连接', apiChoice), apiFields, apiActions),
       stickerLibrary(),
-      el('section', { class: 'settings-group' }, el('h2', {}, '数据'), el('p', { class: 'muted' }, '番外保存在当前浏览器、当前酒馆账号的独立资料库。更新扩展代码不会覆盖资料；跨设备请使用备份恢复。'),
+      el('section', { class: 'settings-group' }, el('h2', {}, '数据'), syncPanel(),
         el('div', { class: 'actions' }, button('按分类导出 ZIP', exportCategories), button('备份全部资料', () => download(backup(state), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         ),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.10：修复非流式提前显示，支持独立脚本正则卡片；正文加宽，滚动条移入阅读框。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.11：修复标题占位词，支持手动跨设备同步、冲突副本和同步前备份。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -822,9 +845,31 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   launcher.hidden = state.settings.launcherEnabled === false;
   try { nativePanel = host.mountSettingsPanel?.({ enabled: !launcher.hidden, setEnabled: setLauncherEnabled }); } catch (error) { report(error); }
   window.addEventListener('pagehide', flushInputs); document.addEventListener('visibilitychange', onVisibilityChange);
+  const refreshSyncStatus = value => {
+    for(const node of shadow.querySelectorAll('[data-sync-status]'))node.textContent=value.text;
+    // Prevent edits while awaiting the atomic commit. Closing/reloading still leaves
+    // the last committed library or its pending-input journal recoverable.
+    const busy=value.kind==='syncing';content.inert=busy;nav.inert=busy;themeButton.disabled=busy;
+  };
+  if(host.libraryRemote) {
+    sync=new LibrarySync({store,remote:host.libraryRemote(),getState:()=>state,prepare:persist,
+      canApply:()=>!disposed&&!task&&!editing&&!busyAction&&!shadow.querySelector('.popup[open]'),
+      onStatus:refreshSyncStatus,onError:error=>report(error,'跨设备同步'),
+      apply:async(shared,metadata,guard)=>{
+        const changed=!equalSync(sharedState(state),shared),next=applyShared(state,shared);
+        const recovery=changed||!await store.syncRecovery();
+        await store.save(next,{syncMeta:metadata,recovery,...guard});
+        state=next;
+        if(!state.stories.some(story=>story.id===storyId))storyId=state.stories[0]?.id||null;
+        chapterIndex=Math.min(chapterIndex,Math.max(0,(current()?.chapters.length||1)-1));
+        root.dataset.theme=state.settings.theme;themeButton.textContent=state.settings.theme==='night'?'☾':'☼';
+        if(changed&&!disposed)render();
+      }
+    });
+  }
   placeLauncher(); render();
   host.onCharacterChange?.(() => { refreshCatalog(false); });
   await refreshCatalog(false);
   if (preview) open();
-  return { open, async dispose() { disposed = true; stop(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); root.remove(); } };
+  return { open, async dispose() { disposed = true; sync?.dispose(); stop(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); root.remove(); } };
 }

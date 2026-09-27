@@ -1,3 +1,4 @@
+import { recoverStoryTitle } from './story-title.js';
 import { normalizeStickers } from './phone-format.js';
 import { DEFAULT_STICKERS } from './default-stickers.js';
 import { normalizeRegexRules } from './preset-regex.js';
@@ -5,7 +6,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.10';
+export const VERSION = '1.0.11';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -118,7 +119,7 @@ export function normalizeState(raw) {
     assert(s.mode === 'html' ? chapters.length <= 1 && chapters.every(c => c.mode === 'html') : chapters.every(c => c.mode !== 'html'), 'HTML 作品需独立保存，不支持续写或混合章节。');
     return { id: key, title: text(s.title, 120) || '未命名番外', prompt: text(s.prompt), mode: normalizeMode(s.mode),
       themeId: text(s.themeId, 100), snapshot: s.snapshot && typeof s.snapshot === 'object' ? clone(s.snapshot) : null,
-      chapters, categoryIds: strings(s.categoryIds).filter(c => categoryIds.has(c)), tags: strings(s.tags, 100), saved: s.saved === true,
+      chapters, categoryIds: strings(s.categoryIds).filter(c => categoryIds.has(c)), tags: strings(s.tags, 100), saved: s.saved === true, syncConflict: s.syncConflict === true,
       continuationDraft: s.mode === 'html' ? '' : text(s.continuationDraft), continuationMode: s.mode === 'html' ? '' : (s.continuationMode || chapters.at(-1)?.mode || s.mode) === 'phone' ? 'phone' : 'prose',
       summaries: list(s.summaries ?? [], 200, '剧情总结').filter(x => Number.isInteger(x.through) && x.through > 0 && x.through <= chapters.length && x.through % 10 === 0).map(x => ({ through: x.through, content: text(x.content, 2000) })),
       createdAt: Number(s.createdAt) || Date.now(), updatedAt: Number(s.updatedAt) || Date.now() };
@@ -133,6 +134,7 @@ export function normalizeState(raw) {
     }
     state.errors = state.errors.filter(e => !e.stage.startsWith('预览模拟'));
   }
+  state.stories.forEach(recoverStoryTitle);
   return state;
 }
 export function backup(state) {

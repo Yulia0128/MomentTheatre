@@ -72,7 +72,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
     } else onPhase?.(settings.stream === false ? '正在等待完整回复…' : '正在生成…');
     checkInput(messages);
     let streamed = '', rawPart;
-    const acceptTitle = parsed => { if (!(story?.chapters || []).some(ch => (ch.mode || story.mode) === 'prose') && !title && parsed.title) { title = parsed.title; onTitle?.(title); } return parsed.content; };
+    const acceptTitle = (parsed, final = false) => { if (!(story?.chapters || []).some(ch => (ch.mode || story.mode) === 'prose') && (!title || final) && parsed.title) { title = parsed.title; onTitle?.(title); } return parsed.content; };
     try {
       rawPart = await host.generate({ messages, settings, snapshot, signal, onChunk: part => {
         streamed = part;
@@ -102,7 +102,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
       onPhase?.('回复中断或为空，已保留内容，正在重新请求…');
       continue;
     }
-    const body = acceptTitle(extractTitle(rawPart, mode)).trim();
+    const body = acceptTitle(extractTitle(rawPart, mode), true).trim();
     if (mode === 'phone') {
       sourceContent += (sourceContent ? '\n\n' : '') + phoneSourceBlock(rawPart); onSource?.(sourceContent);
       const parsed = parsePhoneReport(body, names);

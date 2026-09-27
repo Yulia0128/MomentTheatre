@@ -3,12 +3,14 @@ import { emptyState, normalizeState, clone, id } from './model.js';
 export class LibraryStore {
   constructor(scope, indexedDBFactory = globalThis.indexedDB, journalStorage = null) {
     this.scope = scope; this.factory = indexedDBFactory; this.revision = 0; this.queue = Promise.resolve();
-    this.writer = id(); this.sequence = 0; this.journalKey = `shunxi:${scope}:pending-input`;
+    this.writer = id(); this.sequence = 0; this.syncEpoch = 0; this.activeSync = null; this.journalKey = `shunxi:${scope}:pending-input`;
     try { this.journal = journalStorage || globalThis.localStorage; } catch { this.journal = null; }
   }
   checkpoint(state) {
+    if (this.activeSync) { try { this.activeSync.abort(); } catch { /* Already committed: journal recovers newer input. */ } }
+    this.sequence++;
     if (!this.journal) return;
-    const record = { writer: this.writer, sequence: ++this.sequence, revision: this.revision,
+    const record = { writer: this.writer, sequence: this.sequence, revision: this.revision,
       draft: state.draft, settings: state.settings, editorDraft: state.editorDraft,
       continuations: state.stories.map(s => ({ id: s.id, continuationDraft: s.continuationDraft, continuationMode: s.continuationMode })) };
     try { this.journal.setItem(this.journalKey, JSON.stringify(record)); }
@@ -35,6 +37,7 @@ export class LibraryStore {
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
     });
     this.revision = value?.revision || 0;
+    this.syncMeta = value?.syncMeta || null;
     let state = value ? normalizeState(value.state) : emptyState();
     const pending = this.readCheckpoint();
     if (pending && (pending.revision === this.revision || (value?.writer === pending.writer && (value.sequence || 0) < pending.sequence))) {
@@ -49,32 +52,43 @@ export class LibraryStore {
     }
     return state;
   }
-  save(state) {
-    const snapshot = clone(state), sequence = this.sequence;
+  save(state, { syncMeta = this.syncMeta, recovery = false, expectedRevision = null, expectedSequence = null } = {}) {
+    const snapshot = clone(state), metadata = clone(syncMeta || null), sequence = this.sequence, epoch = this.syncEpoch;
     const work = () => new Promise((resolve, reject) => {
+      if (epoch !== this.syncEpoch) { reject(new Error('同步后资料已更新，已阻止旧的待保存内容覆盖合并结果。')); return; }
       const transaction = this.db.transaction('accounts', 'readwrite');
+      if (expectedRevision !== null) this.activeSync = transaction;
       const store = transaction.objectStore('accounts');
       let conflict = false;
       const request = store.get(this.scope);
       request.onsuccess = () => {
-        if ((request.result?.revision || 0) !== this.revision) { conflict = true; transaction.abort(); return; }
-        store.put({ revision: this.revision + 1, writer: this.writer, sequence, state: snapshot }, this.scope);
+        if ((request.result?.revision || 0) !== this.revision || (expectedRevision !== null && expectedRevision !== this.revision) || (expectedSequence !== null && expectedSequence !== this.sequence)) { conflict = true; transaction.abort(); return; }
+        if (recovery && request.result) store.put(request.result, this.scope + ":sync-recovery");
+        store.put({ revision: this.revision + 1, writer: this.writer, sequence, state: snapshot, syncMeta: metadata }, this.scope);
       };
       transaction.oncomplete = () => {
-        this.revision++;
+        this.revision++; this.syncMeta = metadata;
+        if (expectedRevision !== null) this.syncEpoch++;
+        if (this.activeSync === transaction) this.activeSync = null;
         const pending = this.readCheckpoint();
         if (pending?.writer === this.writer && pending.sequence <= sequence) {
           try { this.journal?.removeItem(this.journalKey); } catch { /* IndexedDB already committed. */ }
         }
         resolve();
       };
-      transaction.onabort = transaction.onerror = () => reject(new Error(conflict
+      transaction.onabort = transaction.onerror = () => { if (this.activeSync === transaction) this.activeSync = null; reject(new Error(conflict
         ? '另一页面已修改资料，请先导出当前备份，再刷新以载入最新内容。为避免覆盖，本次未保存。'
-        : '保存失败，可能是浏览器空间不足。请先导出备份，保留当前页面。'));
+        : '保存失败，可能是浏览器空间不足或同步期间出现新输入。请先导出备份，保留当前页面。')); };
     });
     const result = this.queue.then(work);
     this.queue = result.catch(() => {});
     return result;
+  }
+  async syncRecovery() {
+    return new Promise((resolve,reject)=>{
+      const request=this.db.transaction('accounts').objectStore('accounts').get(this.scope+':sync-recovery');
+      request.onsuccess=()=>resolve(request.result?.state||null);request.onerror=()=>reject(request.error);
+    });
   }
   async close() { await this.queue; this.db?.close(); }
 }
