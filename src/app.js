@@ -1,3 +1,4 @@
+import { readerToken } from './regex-card.js';
 import { syncCharacterBooks } from './character-sources.js';
 import { ReaderAssets } from './reader-assets.js';
 import { defaultRegexSelection, selectedRegexRules, transformProse } from './preset-regex.js';
@@ -79,7 +80,15 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   });
   let saveTimer, noticeTimer, unread = false, disposed = false, busyAction = false;
   let generationError = null, nativePanel = null, refreshRegexOptions = () => {}, catalogRequest = 0;
-  const readingWarnings = new Set();
+  const readingWarnings = new Set(), readerTokens = new WeakMap();
+  const onReaderMessage = event => {
+    const data = event.data;
+    if (!data || data.type !== 'shunxi-reader-error' || typeof data.error !== 'string') return;
+    const frame = [...shadow.querySelectorAll('iframe.prose-frame')].find(frame => frame.contentWindow === event.source);
+    if (!frame || !readerTokens.get(frame) || readerTokens.get(frame) !== data.token) return;
+    const warning = data.error.slice(0, 1000);
+    if (!readingWarnings.has(warning)) { readingWarnings.add(warning); report(new Error(warning), '正文正则'); }
+  };
   const readerAssets = new ReaderAssets(), panes = new Map();
   const root = el('div', { id: 'shunxi-extension-root', 'data-theme': state.settings.theme });
   const shadow = root.attachShadow({ mode: 'open' });
@@ -88,6 +97,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (!cssResponse.ok) throw new Error('瞬息样式文件加载失败，请检查扩展目录是否完整。');
     stylesheet = await cssResponse.text();
   }
+  window.addEventListener('message', onReaderMessage);
   shadow.append(el('style', {}, stylesheet));
   const launcher = button('', () => open(), { class: 'launcher', 'aria-label': '打开瞬息番外小剧场', title: '瞬息 · 拖动可移动，点击打开' });
   launcher.append(mobius(), el('span', { class: 'unread', hidden: true }));
@@ -204,11 +214,14 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     const html = renderReader(story, themeForChapter(story.chapters[index ?? 0] || {}), index, themeForChapter, warnings => {
       for (const warning of warnings) if (!readingWarnings.has(warning)) { readingWarnings.add(warning); report(new Error(warning), '正文正则'); }
     });
-    const frame = el('iframe', { class: mode === 'phone' ? 'reader-frame phone-frame' : 'reader-frame prose-frame', title: story.title + '阅读区', sandbox: '', referrerpolicy: 'no-referrer' });
+    const token = readerToken(html);
+    const frame = el('iframe', { class: mode === 'phone' ? 'reader-frame phone-frame' : 'reader-frame prose-frame', title: story.title + '阅读区', sandbox: token ? 'allow-scripts allow-same-origin' : '', referrerpolicy: 'no-referrer' });
+    if (token) readerTokens.set(frame, token);
+    // This outer document contains only sanitized markup and our nonce-protected
+    // bridge. Keeping its origin avoids Chromium nested opaque-frame blanking.
+    // Every rule script remains in a separate allow-scripts-only opaque card.
     if (host.prepareReaderHtml) frame.srcdoc = host.prepareReaderHtml(html);
-    else {
-      readerAssets.prepare(html).then(doc => { if (!disposed) frame.srcdoc = doc; });
-    }
+    else readerAssets.prepare(html).then(doc => { if (!disposed) frame.srcdoc = doc; });
     return frame;
   }
   function summary(mode, words, themeId) {
@@ -234,7 +247,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     page.append(el('div', { class: 'composer' }, promptInput, el('div', { class: 'composer-options' }, modes, summary(mode, state.settings.words, themeId), button(task ? '生成中…' : '生成番外', () => run(false), { class: 'primary', disabled: Boolean(task) || editing }))));
     page.append(el('div', { class: 'generation-feedback', 'aria-live': 'polite' }, generationError ? el('div', { class: 'generation-error', role: 'alert' }, el('strong', {}, `${generationError.stage} · ${generationError.code}`), el('p', {}, generationError.message), button('查看报错记录', () => changeTab('settings'), { class: 'text-button' })) : null));
     if (task) {
-      page.append(el('div', { class: 'task-bar', role: 'status' }, '生成中 · 收起后继续', button('停止', stop, { class: 'outline' })), el('pre', { class: 'stream-output', 'data-stream': true }, task.visiblePartial || (task.stream ? '正在准备资料…' : '正在等待完整回复…')));
+      page.append(el('div', { class: 'task-bar', role: 'status' }, '生成中 · 收起后继续', button('停止', stop, { class: 'outline' })), el('pre', { class: 'stream-output', 'data-stream': true }, task.stream ? task.visiblePartial || '正在准备资料…' : '正在等待完整回复…'));
     }
     if (hasChapters) {
       chapterIndex = Math.min(chapterIndex, story.chapters.length - 1);
@@ -327,8 +340,10 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       generation.stage = '生成';
       const result = await generateChapter({ host, settings, snapshot, story: referenceStory, initialContent: unfinished?.content || '', prompt, mode, instruction: generation.instruction, summary, signal: controller.signal, onPhase, onSource: source => { const initial = unfinished?.sourceContent || unfinished?.content; generation.sourceContent = [initial ? mode === 'phone' ? phoneSourceBlock(initial) : initial : '', source].filter(Boolean).join('\n\n'); }, onWarnings: warnings => { for (const warning of warnings) if (mode === 'phone' && /^(已尽量|本次回复)/.test(warning) && !generation.warnings?.has(warning)) { (generation.warnings ||= new Set()).add(warning); report(new Error(warning), '消息整理'); } }, onTitle: title => { if (needsTitle) { generation.story.title = title; scheduleSave(); } }, onChunk: content => {
         generation.partial = content;
-        generation.visiblePartial = mode === 'prose' ? transformProse(content, generation.readingRegex, snapshot).parts.map(p => p.html ? p.text.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, '') : p.text).join('') : mode === 'phone' ? serializePhone(parsePhoneReport(content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) : content;
-        const output = shadow.querySelector('[data-stream]'); if (output) output.textContent = generation.visiblePartial;
+        if (generation.stream) {
+          generation.visiblePartial = mode === 'prose' ? transformProse(content, generation.readingRegex, snapshot).parts.map(p => p.html ? p.text.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, '') : p.text).join('') : mode === 'phone' ? serializePhone(parsePhoneReport(content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) : content;
+          const output = shadow.querySelector('[data-stream]'); if (output) output.textContent = generation.visiblePartial;
+        }
         status.textContent = mode === 'phone' ? `${generation.stage}中 · 正在接收手机消息 · 可以收起窗口` : `${generation.stage}中 · 已收到 ${content.length} 字符 · 可以收起窗口`;
       } });
       if (controller.signal.aborted) throw new DOMException('已停止', 'AbortError');
@@ -778,7 +793,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       el('section', { class: 'settings-group' }, el('h2', {}, '数据'), el('p', { class: 'muted' }, '番外保存在当前浏览器、当前酒馆账号的独立资料库。更新扩展代码不会覆盖资料；跨设备请使用备份恢复。'),
         el('div', { class: 'actions' }, button('按分类导出 ZIP', exportCategories), button('备份全部资料', () => download(backup(state), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         ),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.9：自动选择角色世界书，新增角色正则；保存番外时可直接新建分类。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.10：修复非流式提前显示，支持独立脚本正则卡片；正文加宽，滚动条移入阅读框。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -811,5 +826,5 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   host.onCharacterChange?.(() => { refreshCatalog(false); });
   await refreshCatalog(false);
   if (preview) open();
-  return { open, async dispose() { disposed = true; stop(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); root.remove(); } };
+  return { open, async dispose() { disposed = true; stop(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); root.remove(); } };
 }

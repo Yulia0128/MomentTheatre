@@ -1,6 +1,7 @@
 import { sanitizeHtml, parse, walk, generate } from './reading-vendor.js';
 import { renderProseInline } from './prose.js';
 import { extractTitle } from './story-title.js';
+import { cardToken, cardFrame } from './regex-card.js';
 
 const str = (x, max = 100000) => typeof x === 'string' ? x.slice(0, max) : '';
 export function normalizeRegexRules(rules) {
@@ -42,12 +43,12 @@ function sliceSegments(parts, start, end) {
   let offset = 0;
   return parts.flatMap(part => {
     const left = Math.max(0, start - offset), right = Math.min(part.text.length, end - offset); offset += part.text.length;
-    return right > left ? [{ text: part.text.slice(left, right), html: part.html }] : [];
+    return right > left ? [{ ...part, text: part.text.slice(left, right) }] : [];
   });
 }
 export function transformProse(raw, rules = [], snapshot = {}) {
   let parts = [{ text: extractTitle(stripDefaultFilters(raw), 'prose').content, html: false }];
-  const warnings = [];
+  const warnings = [], scripts = [];
   for (const rule of normalizeRegexRules(rules)) {
     if (rule.disabled) continue;
     try {
@@ -57,53 +58,82 @@ export function transformProse(raw, rules = [], snapshot = {}) {
         const groups = typeof args.at(-1) === 'object' ? args.at(-1) : null;
         const offset = args.at(groups ? -3 : -2), captures = args.slice(0, groups ? -3 : -2);
         next.push(...sliceSegments(parts, last, offset));
-        const replacement = rule.replaceString.replace(/\{\{match\}\}/gi, '$0').replace(/\$(\d+)|\$<([^>]+)>|\$&/g, (token, num, name) => {
+        const ownScripts = [];
+        // Authorize literal rule scripts before inserting any model captures.
+        // Captured scripts and event handlers still go through the sanitizer.
+        const template = rule.replaceString.replace(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi, (_, attrs, code) => {
+          if (/\bsrc\s*=/i.test(attrs) || /\$(?:\d+|<[^>]+>|&)|\{\{match\}\}/i.test(code)) {
+            warnings.push('正则「' + rule.scriptName + '」的外部脚本或脚本内捕获替换不受支持，请把数据放在 HTML 模板中。'); return '';
+          }
+          const script = {id:cardToken(),code}; ownScripts.push(script); scripts.push(script);
+          return '<span data-regex-script="' + script.id + '"></span>';
+        });
+        const replacement = template.replace(/\{\{match\}\}/gi, '$0').replace(/\$(\d+)|\$<([^>]+)>|\$&/g, (token, num, name) => {
           let capture = String(name ? groups?.[name] ?? '' : captures[token === '$&' ? 0 : Number(num)] ?? '');
           for (const trim of rule.trimStrings) capture = capture.replaceAll(macros(trim, snapshot), '');
           return capture;
         });
         const html = /<\/?[a-z][\s\S]*?>/i.test(rule.replaceString) || sliceSegments(parts, offset, offset + args[0].length).some(p => p.html);
-        next.push({ text: macros(replacement, snapshot), html }); last = offset + args[0].length;
+        const inherited = sliceSegments(parts, offset, offset + args[0].length).find(p => p.card);
+        const card = inherited?.card || (ownScripts.length ? cardToken() : undefined);
+        next.push({ text: macros(replacement, snapshot), html, ...(card ? {card, name:inherited?.name || rule.scriptName} : {}) }); last = offset + args[0].length;
         return args[0];
       });
       next.push(...sliceSegments(parts, last, text.length));
       if (next.reduce((n,p) => n + p.text.length, 0) > 2000000) throw new Error('替换结果过长');
-      parts = next.reduce((out, part) => { if (!part.text) return out; const last = out.at(-1); if (last?.html === part.html) last.text += part.text; else out.push(part); return out; }, []);
+      parts = next.reduce((out, part) => { if (!part.text) return out; const last = out.at(-1); if (last?.html === part.html && last?.card === part.card) last.text += part.text; else out.push(part); return out; }, []);
     } catch (error) { warnings.push(`正则「${rule.scriptName}」未应用：${error.message}`); }
   }
-  return { parts, warnings };
+  return { parts, warnings, scripts };
 }
-function safeCss(css, context = 'stylesheet') {
+function safeCss(css, context = 'stylesheet', scoped = true) {
   if (css.length > 100000 || /<\/style|expression\s*\(/i.test(css)) throw new Error('美化样式包含不支持的内容');
   const tree = parse(css, { context, parseCustomProperty: true, onParseError: e => { throw e; } });
   walk(tree, node => {
-    if (node.type === 'TypeSelector' && /^(html|body)$/i.test(node.name)) { node.type = 'PseudoClassSelector'; node.name = 'scope'; node.children = null; }
-    if (node.type === 'PseudoClassSelector' && node.name === 'root') node.name = 'scope';
+    if (scoped && node.type === 'TypeSelector' && /^(html|body)$/i.test(node.name)) { node.type = 'PseudoClassSelector'; node.name = 'scope'; node.children = null; }
+    if (scoped && node.type === 'PseudoClassSelector' && node.name === 'root') node.name = 'scope';
     if (node.type === 'Raw' || node.type === 'Atrule' && node.name.toLowerCase() === 'import') throw new Error('不支持的样式语法或外部样式导入');
     if (node.type === 'Url' && !/^https?:\/\//i.test(node.value) && !/^data:(?:image|font)\/[\w.+-]+;base64,/i.test(node.value)) throw new Error('样式图片／字体需要 HTTP(S) 直链');
   });
   const result = generate(tree); if (/<\/style/i.test(result)) throw new Error('不支持的样式结束标记'); return result;
 }
-export function renderRegexProse(raw, rules, snapshot, chapter = 1) {
-  const { parts, warnings } = transformProse(raw, rules, snapshot);
-  let block = 0;
-  const html = parts.map(part => {
-    if (!part.html) return part.text.split(/\n\s*\n/).filter(p => p.trim()).map(p => `<p class="paragraph">${renderProseInline(p)}</p>`).join('');
-    const key = `regex-${chapter}-${++block}`, styles = [];
-    const input = part.text.replace(/^\s*```(?:html)?\s*\n?|\n?```\s*$/gi, '').replace(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi, (_, css) => {
-      try { styles.push(safeCss(css)); } catch(error) { warnings.push(error.message); } return '';
-    });
-    const content = sanitizeHtml(input, {
-      allowedTags: [...sanitizeHtml.defaults.allowedTags, 'img', 'details', 'summary', 'del'],
-      allowedAttributes: { '*': ['class','id','style','title','aria-*','data-*'], img: ['src','alt','width','height','loading','referrerpolicy'], details:['open'], td:['colspan','rowspan'], th:['colspan','rowspan'] },
-      allowedSchemes: ['https','http'], allowProtocolRelative: false,
-      parseStyleAttributes: false,
-      transformTags: { '*': (tagName, attrs) => {
-        if (attrs.style) { try { attrs.style = safeCss(attrs.style, 'declarationList'); } catch(error) { delete attrs.style; warnings.push(error.message); } }
-        return { tagName, attribs: tagName === 'img' ? { ...attrs, loading:'lazy', referrerpolicy:'no-referrer' } : attrs };
-      } },
-    });
-    return `<div class="preset-markup" data-regex-block="${key}">${styles.length ? `<style>@scope ([data-regex-block="${key}"]) { ${styles.join('\n')} }</style>` : ''}${content}</div>`;
-  }).join('');
-  return { html, warnings };
+function cleanMarkup(joined, warnings, scoped) {
+  const styles = [];
+  const input = joined.replace(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi, (_, css) => {
+    try { styles.push(safeCss(css, 'stylesheet', scoped)); } catch(error) { warnings.push(error.message); } return '';
+  });
+  const content = sanitizeHtml(input, {
+    allowedTags: [...sanitizeHtml.defaults.allowedTags, 'img', 'details', 'summary', 'del', 'template'],
+    allowedAttributes: { '*': ['class','id','style','title','aria-*','data-*'], img: ['src','alt','width','height','loading','referrerpolicy'], details:['open'], td:['colspan','rowspan'], th:['colspan','rowspan'] },
+    nonTextTags: ['script','style','textarea','option','title'],
+    allowedSchemes: ['https','http'], allowProtocolRelative: false, parseStyleAttributes: false,
+    transformTags: { '*': (tagName, attrs) => {
+      if (attrs.style) { try { attrs.style = safeCss(attrs.style, 'declarationList', scoped); } catch(error) { delete attrs.style; warnings.push(error.message); } }
+      return { tagName, attribs: tagName === 'img' ? { ...attrs, loading:'lazy', referrerpolicy:'no-referrer' } : attrs };
+    } },
+  });
+  return {content, css:styles.join('\n')};
+}
+export function renderRegexProse(raw, rules, snapshot, chapter = 1, nonce = cardToken()) {
+  const { parts, warnings, scripts } = transformProse(raw, rules, snapshot);
+  const prose = text => text.split(/\n\s*\n/).filter(p => p.trim()).map(p => '<p class="paragraph">' + renderProseInline(p) + '</p>').join('');
+  if (!parts.some(part => part.html)) return {html:parts.map(part => prose(part.text)).join(''),warnings,cards:0};
+  const unfence = text => text.replace(/^\s*\x60\x60\x60(?:html)?\s*\n?|\n?\x60\x60\x60\s*$/gi, '');
+  const fragments = [], cards = [];
+  for (let i=0;i<parts.length;i++) {
+    const part = parts[i];
+    if (!part.card) { fragments.push(part.html ? unfence(part.text) : prose(part.text)); continue; }
+    let text = part.text;
+    while (parts[i+1]?.card === part.card) text += parts[++i].text;
+    const cleaned = cleanMarkup(unfence(text), warnings, false);
+    cards.push({id:part.card, html:cardFrame(cleaned.content, cleaned.css, scripts, nonce, part.card, part.name)});
+    fragments.push('<span data-regex-frame="' + part.card + '"></span>');
+  }
+  // Parse static header/footer markup together, preserving containers across prose.
+  const key = 'regex-' + chapter + '-1';
+  const cleaned = cleanMarkup(fragments.join(''), warnings, true);
+  let content = cleaned.content;
+  for (const card of cards) content = content.replace('<span data-regex-frame="' + card.id + '"></span>', () => card.html);
+  const html = '<div class="preset-markup" data-regex-block="' + key + '">' + (cleaned.css ? '<style>@scope ([data-regex-block="' + key + '"]) { ' + cleaned.css + ' }</style>' : '') + content + '</div>';
+  return {html, warnings:[...new Set(warnings)], cards:cards.length};
 }

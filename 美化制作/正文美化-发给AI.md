@@ -26,7 +26,7 @@
     "fontSize": "14px",
     "lineHeight": "2"
   },
-  "css": ".prose-chapter { padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: 26px; line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; } .preset-markup { max-width: 100%; overflow-wrap: anywhere; } .preset-markup img { max-width: 100%; height: auto; }"
+  "css": ".prose-chapter { width: 100%; max-width: none; padding: clamp(18px, 4vw, 36px); } .prose-title { margin: 0 0 1.2em; padding: 0; font-family: inherit; font-size: 26px; line-height: 1.5; font-weight: 600; color: var(--reader-ink); text-align: center; text-indent: 0; overflow-wrap: anywhere; } .paragraph { text-indent: 2em; margin: 0 0 1.2em; } .paragraph q { color: #8A563D; } .paragraph strong { color: #302E29; font-weight: 700; } .paragraph em { color: #6C7275; font-style: italic; } .paragraph del { color: #8B857C; text-decoration: line-through; } .preset-markup { max-width: 100%; overflow-wrap: anywhere; } .preset-markup img { max-width: 100%; height: auto; } .regex-card { max-width: 100%; border: 0; }"
 }
 ```
 
@@ -147,10 +147,18 @@
 
 ## 1.0.8 预设正则与完整原文
 
-正文阅读先隐藏 think／thinking／cot 标签块和 HTML 注释（不区分大小写），再按顺序应用该章节保存的预设正则。规则生成的 HTML／CSS 位于 `.preset-markup[data-regex-block]` 中，样式限制在自身区块内；可呈现文首卡片、图片等，不运行 JavaScript、iframe 或表单。未经过规则替换的模型 HTML 仍显示为文本。
+正文阅读先隐藏 think／thinking／cot 标签块和 HTML 注释（不区分大小写），再按顺序应用该章节保存的预设正则。规则生成的 HTML／CSS 位于 `.preset-markup[data-regex-block]` 中，样式限制在自身区块内；可呈现文首卡片、图片等；1.0.10 起另支持下文所述的隔离脚本卡片，不允许普通替换内容嵌入任意 iframe 或表单。未经过规则替换的模型 HTML 仍显示为文本。
 
 主题只调整外观，不负责解析或删除原文。编辑框保留 AI 原始回复，包括思考、草稿、注释和标题标签；保存编辑后重新派生阅读显示。规则与主题一同保存章节快照，切换预设或修改规则不重写旧章节。不要隐藏整个 `.preset-markup`，否则会连文首美化一起隐藏。
 
 ## 1.0.9 角色正则
 
 正文可依次应用预设正则和角色正则，生成的 HTML／CSS 继续使用 `.preset-markup` 结构；仅用于阅读显示，编辑原文完整保留。小手机不应用这两类正文规则，消息变量和组件结构不变，本轮不修改主题 JSON 格式。
+
+## 1.0.10 阅读布局与脚本正则
+
+正文阅读框上限 860px，内置主题铺满可用宽度，滚动条在框内，正文 14px、标题 26px 不变；自定义主题仍可自行设宽。不要在 .prose-chapter 或正文段落上重复建立整篇滚动容器。
+
+静态正文正则先合并文首／文末 HTML 再清理，样式在本章 .preset-markup 中隔离。带脚本的所选正则则成为独立 iframe.regex-card，按内容自动调高；主题可调整卡片外框，不能从外部选中卡片内部 DOM。卡片只运行替换模板中原有的内联经典脚本：将捕获值放进 template 节点，由脚本读取；不要直接写入 JavaScript 字符串。不提供父窗口、酒馆助手、宿主变量、外部脚本、eval、内联事件处理器或联网 API；交互用 addEventListener。
+
+编辑框和备份始终保留 AI 原文；显示过滤、卡片渲染均派生于原文，不覆写内容。小手机不使用正文正则，消息变量与皮肤协议不变。正则快照已存在的旧作品可直接重新打开尝试渲染，无须重生成。

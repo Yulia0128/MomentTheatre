@@ -64,12 +64,19 @@ export class ReaderAssets {
     try { return await promise; } finally { this.pending.delete(url); }
   }
   async prepare(html) {
-    // Reader documents are inert, validated HTML/CSS. HTML-game mode never uses this cache.
+    // Card srcdoc has already been escaped; leave its independent assets intact.
+    // Replacing URLs inside it as plain HTML could corrupt scripts or quoting.
+    const cards = [];
+    html = html.replace(/<iframe\b[^>]*data-regex-card=[^>]*><\/iframe>/gi, card => {
+      const token = 'SHUNXI_CARD_ASSET_' + cards.length + '_END'; cards.push({token,card}); return token;
+    });
     const urls = [...new Set(html.match(/https?:[^\s"'()<>]+/g) || [])].slice(0, 32), replacements = new Map();
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(4, urls.length) }, async () => {
       while (next < urls.length) { const original = urls[next++]; replacements.set(original, await this.load(original.replaceAll('&amp;', '&'))); }
     }));
-    return html.replace(/https?:[^\s"'()<>]+/g, url => replacements.get(url) || url);
+    let prepared = html.replace(/https?:[^\s"'()<>]+/g, url => replacements.get(url) || url);
+    for (const {token,card} of cards) prepared = prepared.replace(token, () => card);
+    return prepared;
   }
 }
