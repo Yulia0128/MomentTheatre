@@ -46,11 +46,13 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
     if (story?.chapters?.length) throw new Error('HTML 作品不支持续写。');
     const messages = buildMessages({ snapshot, prompt, mode, maxInputChars: 1000000 });
     checkInput(messages); signal?.throwIfAborted(); onPhase?.('正在生成完整 HTML…');
-    const content = cleanHtml(await host.generate({ messages, settings, snapshot, signal, onChunk }));
+    const sourceContent = await host.generate({ messages, settings, snapshot, signal, onChunk: raw=>{onSource?.(raw);onChunk?.(cleanHtml(raw));} });
+    onSource?.(sourceContent);
+    const content = cleanHtml(sourceContent);
     signal?.throwIfAborted();
-    if (!content) throw Object.assign(new Error('HTML 回复为空。'), { code: 'EMPTY_RESPONSE' });
-    const issue = htmlIssue(content); onChunk?.(content);
-    return { content, title: extractTitle(content, 'html').title, complete: !issue, htmlIssue: issue, actual: content.length, unit: '字符', rounds: 0, short: false };
+    if (!sourceContent.trim()) throw Object.assign(new Error('HTML 回复为空。'), { code: 'EMPTY_RESPONSE' });
+    const issue = htmlIssue(sourceContent); onChunk?.(content);
+    return { content:content||sourceContent, sourceContent, title: extractTitle(content, 'html').title, complete: !issue, htmlIssue: issue, actual: content.length, unit: '字符', rounds: 0, short: false };
   }
   const target = mode === 'phone' ? settings.targetMessages || 50 : settings.words;
   const unit = mode === 'phone' ? '条' : '字';

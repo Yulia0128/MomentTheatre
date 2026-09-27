@@ -1,3 +1,4 @@
+import { cleanHtml } from './html-work.js';
 import { renderReader } from './reader.js';
 import { resolveChapterTheme } from './themes.js';
 
@@ -42,7 +43,7 @@ export function categoryFiles(state, selected = null) {
     const folder = distinctName(category.name, directories), names = new Set();
     const stories = state.stories.filter(s => s.saved && (category.id === 'uncategorized' ? !s.categoryIds.length : s.categoryIds.includes(category.id)));
     if (!stories.length) files.push({ path: `瞬息番外导出/${folder}/`, content: '' });
-    for (const story of stories) files.push({ path: `瞬息番外导出/${folder}/${distinctName(story.title, names)}.html`, content: story.mode === 'html' ? story.chapters[0]?.content || '' : renderReader(story, resolveChapterTheme(state, story, story.chapters[0] || {}), null, ch => resolveChapterTheme(state, story, ch)) });
+    for (const story of stories) files.push({ path: `瞬息番外导出/${folder}/${distinctName(story.title, names)}.html`, content: story.mode === 'html' ? cleanHtml(story.chapters[0]?.content || '') : renderReader(story, resolveChapterTheme(state, story, story.chapters[0] || {}), null, ch => resolveChapterTheme(state, story, ch)) });
   }
   return files;
 }

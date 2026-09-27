@@ -140,7 +140,8 @@ function jsonMessages(text) {
       start = -1;
     }
   }
-  return { rows, recovered: true };
+  const candidates=[...text.matchAll(/\{\s*"(?:type|sender)"\s*:/g)].length;
+  return { rows, recovered: true, rejected: Math.max(0,candidates-rows.length) };
 }
 function outsideXml(text) {
   let out = '', depth = 0, quote = false, escaped = false;
@@ -164,13 +165,31 @@ function outsideXml(text) {
   }
   return out;
 }
+function stripClosedThoughts(content) {
+  const text=String(content??''), tags=/<(\/?)(think|thinking|cot)\b[^>]*>/gi, stack=[], spans=[];
+  for(let match;(match=tags.exec(text));){
+    const name=match[2].toLowerCase();
+    if(!match[1]){stack.push({name,start:match.index});continue;}
+    const index=stack.findLastIndex(item=>item.name===name);
+    if(index<0)continue;
+    spans.push({start:stack[index].start,end:tags.lastIndex});stack.splice(index);
+  }
+  // An unclosed prefix must not steal the closing tag of a later, separate block.
+  let result='',cursor=0;
+  for(const span of spans.sort((a,b)=>a.start-b.start||b.end-a.end)){
+    if(span.start>=cursor)result+=text.slice(cursor,span.start);
+    cursor=Math.max(cursor,span.end);
+  }
+  return result+text.slice(cursor);
+}
+const phoneEnvelope = content => stripClosedThoughts(content).replace(/<!--[\s\S]*?-->/g, '');
 function phoneBodies(content) {
-  const text = String(content ?? '');
+  const text = phoneEnvelope(content);
   // Extract the independent phone block before inspecting any surrounding tags.
   const openings = [...text.matchAll(/<小手机\s*>/g)];
   if (openings.length) return openings.map((m, index) => {
     const rest = text.slice(m.index + m[0].length, openings[index + 1]?.index);
-    return outsideXml(rest.split(/<\/小手机\s*>/)[0].replace(/<(think|thinking|cot)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').split(/<(?:think|thinking|cot)\b[^>]*>/i)[0]);
+    return outsideXml(rest.split(/<\/小手机\s*>/)[0].replace(/<!--[\s\S]*?(?:-->|$)/g, '').replace(/<(think|thinking|cot)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').split(/<(?:think|thinking|cot)\b[^>]*>/i)[0]);
   });
   // Legacy replies without the wrapper still work. Thought blocks aren't messages.
   const legacy = text.replace(/<(think|thinking|cot)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').replace(/<(?:think|thinking|cot)\b[^>]*>[\s\S]*$/i, '').replace(/<!--[\s\S]*?(?:-->|$)/g, '');
@@ -179,7 +198,7 @@ function phoneBodies(content) {
 export const phoneBody = content => phoneBodies(content).join('\n');
 // Give legacy response chunks an explicit boundary when a later request adds
 // a wrapped reply. Keep all original characters in the editable text.
-export const phoneSourceBlock = content => /<小手机\s*>/.test(content) || !phoneBody(content).trim() ? content : `<小手机>\n${content}\n</小手机>`;
+export const phoneSourceBlock = content => /<小手机\s*>/.test(phoneEnvelope(content)) || !phoneBody(content).trim() ? content : `<小手机>\n${content}\n</小手机>`;
 function messageRecords(text) {
   const records = []; let start = -1, depth = 0, escaped = false;
   for (let i = 0; i < text.length; i++) {
@@ -205,7 +224,7 @@ function parsePhoneBody(text, names) {
   const lineRows = lines.map(line => lineMessage(line, names)).filter(Boolean);
   const source = lineRows.length ? { rows: lineRows, recovered: false } : jsonMessages(text);
   if (source.rows.length > 2000) throw new Error('小手机每节最多 2000 条消息。');
-  const messages = []; let time = '', rejected = 0;
+  const messages = []; let time = '', rejected = source.rejected || 0;
   for (const raw of source.rows) {
     if (raw?.type === 'time') { time = scalar(raw.text); continue; }
     const item = normalizeMessage(raw, names);
@@ -213,8 +232,12 @@ function parsePhoneBody(text, names) {
     if (!item.time && time) item.time = time;
     messages.push(item);
   }
-  if (lineRows.length) rejected += lines.filter(line => /^\s*[\[［]/.test(line) && !lineMessage(line, names)).length;
-  const warnings = source.recovered || rejected ? ['已尽量恢复可识别的小手机消息；未识别部分保留在原始回复中，可打开编辑查看。'] : [];
+  if (lineRows.length) rejected += lines.filter(line => {
+    if(lineMessage(line,names))return false;
+    const parts=splitFields(line.replace(/^\s*[\[［]/,'').replace(/[\]］]\s*$/,''));
+    return parts.length>1 && (senderOf(parts[0]?.trim(),names) || /^\d{1,2}:\d{2}/.test(parts[1]?.trim()));
+  }).length;
+  const warnings = rejected ? [`本次有 ${rejected} 条小手机消息无法显示，原文已保留，可打开编辑查看。`] : [];
   return { messages, warnings, recognized: source.rows.length > 0 || !source.recovered };
 }
 export function parsePhone(content, names) {

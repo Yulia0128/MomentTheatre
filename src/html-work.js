@@ -1,11 +1,56 @@
 export const HTML_SANDBOX = 'allow-scripts';
+// Locate the document without rewriting its scripts, styles, comments or text.
+// The masked copy is only used for finding the start; editable source stays exact.
+function documentSource(source) {
+  const raw=String(source??''),markers=/<!doctype\s+html\b[^>]*>|<html(?=[\s>])[^>]*>|<(think|thinking|cot)\b[^>]*>|<!--/gi;
+  for(let match;(match=markers.exec(raw));){
+    if(match[0]==='<!--'){const end=raw.indexOf('-->',markers.lastIndex);if(end>=0)markers.lastIndex=end+3;continue;}
+    if(!match[1])return raw.slice(match.index);
+    const close=new RegExp('</'+match[1]+'\\s*>','gi');close.lastIndex=markers.lastIndex;
+    let end=close.exec(raw);
+    // A closing thought literal inside a JS string is not the end of a prefix.
+    const doc=/<!doctype\s+html\b[^>]*>|<html(?=[\s>])[^>]*>/gi;doc.lastIndex=markers.lastIndex;
+    const candidate=doc.exec(raw);
+    if(candidate&&end&&candidate.index<end.index){
+      const shape=documentShape(raw.slice(candidate.index));
+      if(shape.end&&candidate.index+shape.end>end.index){close.lastIndex=candidate.index+shape.end;end=close.exec(raw);}
+    }
+    if(end)markers.lastIndex=close.lastIndex;
+  }
+  return '';
+}
+function documentShape(text) {
+  const tags=/<!--[\s\S]*?(?:-->|$)|<![^>]*>|<\/?([a-z][a-z0-9:-]*)\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
+  let root=false,head=false,headClosed=false,body=false,bodyClosed=false,template=0;
+  for(let match; (match=tags.exec(text));){
+    if(!match[1])continue;
+    const name=match[1].toLowerCase(),closing=match[0].startsWith('</');
+    if(!closing&&['script','style','textarea','title','xmp'].includes(name)){
+      const close=new RegExp('</'+name+'\\s*>','gi');close.lastIndex=tags.lastIndex;
+      const end=close.exec(text);if(!end)return {end:0,complete:false};tags.lastIndex=close.lastIndex;continue;
+    }
+    if(name==='template'){template=Math.max(0,template+(closing?-1:1));continue;}
+    if(template)continue;
+    if(name==='html'){
+      if(!closing)root=true;
+      else if(root)return {end:tags.lastIndex,complete:head&&headClosed&&body&&bodyClosed};
+    }
+    if(!root)continue;
+    if(name==='head'){if(!closing&&!body)head=true;else if(closing&&head)headClosed=true;}
+    if(name==='body'){if(!closing&&headClosed)body=true;else if(closing&&body)bodyClosed=true;}
+  }
+  return {end:0,complete:false};
+}
 export function cleanHtml(source) {
-  return String(source ?? '').trim().replace(/^```(?:html)?\s*\n([\s\S]*?)\n```\s*$/i, '$1').trim();
+  const document=documentSource(source);if(!document)return '';
+  const shape=documentShape(document);
+  return (shape.end?document.slice(0,shape.end):document.replace(/\s*```\s*$/,'')).trim();
 }
 export function htmlIssue(source) {
-  const content = cleanHtml(source);
-  if (!content) return 'HTML 回复为空。';
-  if (!/^<!doctype\s+html\s*>/i.test(content) || !/<html(?:\s|>)/i.test(content) || !/<head(?:\s|>)/i.test(content) || !/<\/head\s*>/i.test(content) || !/<body(?:\s|>)/i.test(content) || !/<\/body\s*>/i.test(content) || !/<\/html\s*>\s*$/i.test(content)) return 'HTML 文档结构不完整，可能被截断。代码已保留，请编辑补全或重新生成。';
+  if(!String(source??'').trim())return 'HTML 回复为空。';
+  const content=cleanHtml(source);
+  if(!content)return '未识别到 HTML 文档，原始回复已保留，可打开编辑查看。';
+  if(!documentShape(content).complete)return 'HTML 文档结构不完整，可能被截断。代码已保留，请编辑补全或重新生成。';
   return '';
 }
 export function htmlDocument(source) {

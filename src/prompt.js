@@ -70,7 +70,7 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
   const before = entries.filter(e => e.position === 0).map(e => e.content).join('\n\n');
   const after = entries.filter(e => e.position === 1).map(e => e.content).join('\n\n');
   const history = [];
-  if (originalContext.length) history.push({ role: 'system', content: `以下是最初建立番外时选取的正文参考，仅供取材：\n${originalContext.map(m => `${m.role}: ${m.content}`).join('\n')}` });
+  for (const message of originalContext) { if (['user','assistant'].includes(message.role) && typeof message.content==='string') history.push({role:message.role,content:message.content}); }
   history.push({ role: 'user', content: `番外要求：\n${initial}` });
   if (summary) history.push({ role: 'system', content: `截至第 ${summary.through} 节的剧情总结：\n${summary.content}` });
   reference.forEach((chapter, i) => {
@@ -81,7 +81,7 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
     charDescription: expand(c.description, snapshot, macros), charPersonality: expand(c.personality, snapshot, macros), scenario: expand(c.scenario, snapshot, macros),
     personaDescription: expand(u.description, snapshot, macros), dialogueExamples: [entries.filter(e => e.position === 5).map(e => e.content).join('\n'), expand(c.mes_example, snapshot, macros), entries.filter(e => e.position === 6).map(e => e.content).join('\n')].filter(Boolean).join('\n\n'), worldInfoBefore: before, worldInfoAfter: after,
   };
-  const messages = [{ role: 'system', content: `你正在创作独立番外。角色为 ${c.name || '角色'}，用户人物为 ${u.name || '我'}。这篇番外不改变正文。采用用户要求的平行设定，保持人物核心特征。` }];
+  const messages = [{ role: 'system', content: `当前角色：${c.name || '角色'}。当前用户人物：${u.name || '我'}。` }];
   const preset = snapshot.preset;
   let historyAdded = false;
   const injections = entries.filter(e => e.position === 4);
@@ -116,6 +116,17 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
       if (blocks[key]) messages.push({ role: 'system', content: blocks[key] });
     }
     if (c.system_prompt) messages.push({ role: 'system', content: expand(c.system_prompt, snapshot, macros) });
+  }
+  // Custom presets sometimes omit native material slots entirely. Fill those
+  // missing slots without re-enabling a declared/disabled marker or duplicating macros.
+  if(preset?.prompts?.length){
+    const declared=new Set(preset.prompts.filter(p=>p.marker).map(p=>p.identifier));
+    const existing=[...messages.filter(m=>!m.history),...injections].map(m=>m.content||'').join('\n');
+    const missing=['worldInfoBefore','charDescription','charPersonality','scenario','personaDescription','dialogueExamples','worldInfoAfter']
+      .filter(key=>!declared.has(key)&&blocks[key]?.trim()&&!existing.includes(blocks[key]))
+      .map(key=>({role:'system',content:blocks[key]}));
+    const position=historyAdded?messages.indexOf(historySlot):messages.length;
+    messages.splice(position,0,...missing);
   }
   const injectedHistory = injectHistory(history, injections);
   if (historyAdded) messages.splice(messages.indexOf(historySlot), 1, ...injectedHistory);
