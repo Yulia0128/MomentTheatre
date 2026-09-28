@@ -1,3 +1,5 @@
+import { migrateStickerCatalogue } from './default-stickers.js';
+import { htmlFilterRules } from './html-filters.js';
 import { probeConnection } from './connection-test.js';
 import { LibrarySync, sharedState, applyShared, equalSync } from './library-sync.js';
 import { readerToken } from './regex-card.js';
@@ -67,6 +69,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   if (previous) return;
   const store = new LibraryStore(host.scope);
   let state = await store.open();
+  if (migrateStickerCatalogue(state.settings)) await store.save(state);
   state.themes = state.themes.map(validateTheme);
   let catalog = { characters: [], personas: [], books: [], presets: [] };
   let tab = 'generate', storyId = state.stories[0]?.id || null, chapterIndex = 0, continuationOpen = false;
@@ -206,12 +209,23 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     }
     for (const [name, item] of panes) item.page.hidden = name !== tab;
   }
+  async function captureLegacyHtmlFilters(story) {
+    if (story.snapshot?.htmlFiltersCaptured) return;
+    // Old HTML did not save regex snapshots. An explicit edit/save captures only
+    // its original named preset, never a different currently selected preset.
+    const name = story.snapshot?.presetName;
+    if (!name) return;
+    const detail = await host.presetRegexDetail(name);
+    const rules = htmlFilterRules(selectedRegexRules(detail, state.settings));
+    for (const chapter of story.chapters) chapter.readingRegex = clone(rules);
+    story.snapshot.htmlFiltersCaptured = true;
+  }
   function makeReader(story, index = null, previewThemeId = null) {
     const mode = story.chapters[index]?.mode || story.mode;
     if (mode === 'html') {
       const chapter = story.chapters[index ?? 0], issue = htmlIssue(chapter?.content);
       if ((!chapter?.complete && cleanHtml(chapter?.content) === chapter?.content?.trim()) || issue) return el('div', { class: 'html-diagnostic' }, el('p', {}, issue || 'HTML 代码尚未标记完成，请编辑后保存。'), el('pre', { class: 'stream-output' }, chapter?.content || ''));
-      return el('iframe', { class: 'reader-frame html-frame', title: `${story.title} HTML 作品`, sandbox: HTML_SANDBOX, referrerpolicy: 'no-referrer', allow: 'fullscreen', srcdoc: htmlDocument(chapter.content) });
+      return el('iframe', { class: 'reader-frame html-frame', title: `${story.title} HTML 作品`, sandbox: HTML_SANDBOX, referrerpolicy: 'no-referrer', allow: 'fullscreen', srcdoc: htmlDocument(chapter.content, chapter.readingRegex, story.snapshot, warnings => { for(const warning of warnings) if(!readingWarnings.has(warning)) { readingWarnings.add(warning); report(new Error(warning), 'HTML 过滤'); } }) });
     }
     const themeForChapter = ch => previewThemeId ? resolveTheme(state, ch.mode || story.mode, previewThemeId) : resolveChapterTheme(state, story, ch);
     const html = renderReader(story, themeForChapter(story.chapters[index ?? 0] || {}), index, themeForChapter, warnings => {
@@ -243,7 +257,12 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function generationPage() {
     const story = current(), page = el('section', { class: 'page generation-page' });
     const hasChapters = Boolean(story?.chapters.length), mode = state.draft.mode;
-    page.append(el('div', { class: 'page-heading' }, el('h1', {}, '番外')));
+    const drafts = state.stories.filter(item => !item.saved && item.chapters.length && item.id !== story?.id);
+    const resume = item => { storyId=item.id;chapterIndex=Math.max(0,item.chapters.length-1);continuationOpen=false;render(); };
+    page.append(el('div', { class: 'page-heading' }, el('h1', {}, '番外'), drafts.length ? button('返回草稿', () => {
+      if(drafts.length===1)return resume(drafts[0]);
+      let pop;pop=popup('返回草稿',el('div',{class:'choice-list'},drafts.map(item=>button(item.title,()=>{pop.close();resume(item);}))));
+    }, {class:'text-button',disabled:Boolean(task)||editing}) : null));
     const promptInput = el('textarea', { rows: 3, value: state.draft.prompt, 'aria-label': '番外设定', placeholder: '想看看另一个世界的你们？写下这篇番外的设定与要求。', disabled: Boolean(task) || editing, onInput: e => { state.draft.prompt = e.target.value; scheduleSave(); } });
     const modes = el('fieldset', { class: 'mode-choice', disabled: Boolean(task) || editing }, el('legend', {}, '生成模式'), ['prose', 'phone', 'html'].map(value => el('label', {}, el('input', { type: 'radio', name: 'story-mode', value, checked: mode === value, onChange: () => { state.draft.mode = value; scheduleSave(); render(); } }), modeLabel(value))));
     const themeId = state.settings[mode === 'phone' ? 'phoneTheme' : 'proseTheme'];
@@ -262,7 +281,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         const complete = el('input', { type: 'checkbox', checked: state.editorDraft?.complete ?? story.chapters[chapterIndex].complete, onChange: e => { state.editorDraft.complete = e.target.checked; scheduleSave(); } });
         page.append(phoneChapter ? null : label('标题', titleInput), label(story.mode === 'html' ? 'HTML 源代码' : (story.chapters[chapterIndex].mode || story.mode) === 'phone' ? '小手机消息' : '章节内容', editor, phoneChapter ? '每行一条，如 [char|23:48|你好]；特殊消息保留类型与对应字段。' : ''), el('label', { class: 'check-row' }, complete, story.mode === 'html' ? '页面代码完整' : '这一节已完成'), el('div', { class: 'actions' }, button('保存编辑', () => action(async () => {
           if (!editText.trim()) throw new Error('章节内容不能为空。');
-          if (story.mode === 'html') { if (complete.checked && htmlIssue(editText)) throw new Error(htmlIssue(editText)); story.chapters[chapterIndex].sourceContent=editText; }
+          if (story.mode === 'html') { await captureLegacyHtmlFilters(story); if (complete.checked && htmlIssue(editText)) throw new Error(htmlIssue(editText)); story.chapters[chapterIndex].sourceContent=editText; }
           const phoneEdit = phoneChapter ? savePhoneEdit(story.chapters[chapterIndex], editText, state.settings.stickers, { character: story.snapshot?.character?.name, persona: story.snapshot?.persona?.name }) : null;
           if (!phoneChapter && story.mode !== 'html') story.chapters[chapterIndex].sourceContent = '';
           const size = complete.checked ? phoneEdit ? phoneEdit.messages.length : contentLength(editText, story.chapters[chapterIndex].mode || story.mode) : 0;
@@ -324,11 +343,12 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       if (readingTheme && !preview) readerAssets.prepare(renderReader(sampleStory(mode), readingTheme, 0)).catch(() => {});
       const snapshot = previousStory?.snapshot || await host.snapshot(settings);
       generation.readingRegex = unfinished?.readingRegex || [];
-      if (mode === 'prose' && !unfinished) {
-        try { generation.readingRegex = selectedRegexRules(await host.presetRegexDetail(settings.preset), settings); }
+      if ((mode === 'prose' || mode === 'html') && !unfinished) {
+        try { generation.readingRegex = selectedRegexRules(await host.presetRegexDetail(settings.preset), settings); if (mode === 'html') snapshot.htmlFiltersCaptured = true; }
         catch (error) { report(error, '读取预设正则'); }
-        if (snapshot.characterKey) generation.readingRegex.push(...selectedRegexRules({ key:snapshot.characterKey, rules:snapshot.characterRegex || [] }, settings, 'regexCharacters')); 
+        if (mode === 'prose' && snapshot.characterKey) generation.readingRegex.push(...selectedRegexRules({ key:snapshot.characterKey, rules:snapshot.characterRegex || [] }, settings, 'regexCharacters')); 
       }
+      if (mode === 'html') { generation.readingRegex = htmlFilterRules(generation.readingRegex); }
       const needsTitle = mode !== 'phone' && (previousStory?.title === '未命名番外' || !(previousStory?.chapters || []).some(ch => (ch.mode || previousStory.mode) === 'prose')); 
       if (unfinished?.readingTheme) settings.phoneTheme = unfinished.readingTheme.id;
       if (controller.signal.aborted) throw new DOMException('已停止', 'AbortError');
@@ -345,7 +365,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       const result = await generateChapter({ host, settings, snapshot, story: referenceStory, initialContent: unfinished?.content || '', prompt, mode, instruction: generation.instruction, summary, signal: controller.signal, onPhase, onSource: source => { const initial = unfinished?.sourceContent || unfinished?.content; generation.sourceContent = [initial ? mode === 'phone' ? phoneSourceBlock(initial) : initial : '', source].filter(Boolean).join('\n\n'); }, onWarnings: warnings => { for (const warning of warnings) if (mode === 'phone' && /^(本次有|本次回复)/.test(warning) && !generation.warnings?.has(warning)) { (generation.warnings ||= new Set()).add(warning); report(new Error(warning), '消息整理'); } }, onTitle: title => { if (needsTitle) { generation.story.title = title; scheduleSave(); } }, onChunk: content => {
         generation.partial = content;
         if (generation.stream) {
-          generation.visiblePartial = mode === 'prose' ? transformProse(content, generation.readingRegex, snapshot).parts.map(p => p.html ? p.text.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, '') : p.text).join('') : mode === 'phone' ? serializePhone(parsePhoneReport(content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) : content;
+          generation.visiblePartial = mode === 'prose' ? transformProse(content, generation.readingRegex, snapshot).parts.map(p => p.html ? p.text.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, '') : p.text).join('') : mode === 'phone' ? serializePhone(parsePhoneReport(content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) : cleanHtml(content, generation.readingRegex, snapshot);
           const output = shadow.querySelector('[data-stream]'); if (output) output.textContent = generation.visiblePartial;
         }
         status.textContent = mode === 'phone' ? `${generation.stage}中 · 正在接收手机消息 · 可以收起窗口` : `${generation.stage}中 · 已收到 ${content.length} 字符 · 可以收起窗口`;
@@ -424,7 +444,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   }
   function copyStory(story) {
     if (story.mode === 'html') {
-      const value = cleanHtml(story.chapters[0]?.content || '');
+      const value = cleanHtml(story.chapters[0]?.content || '', story.chapters[0]?.readingRegex, story.snapshot);
       Promise.resolve().then(() => navigator.clipboard.writeText(value)).then(() => notify('HTML 源代码已复制。'), () => popup('手动复制 HTML', el('textarea', { rows: 12, value, readonly: true })));
       return;
     }
@@ -647,7 +667,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
           } }));
           const scopes = rule.placement.map(n => ({ 1:'用户输入', 2:'AI 回复', 3:'快捷命令', 5:'世界书', 6:'思考内容' }[n] || String(n))).join('、');
           const pop = popup(title + '详情', el('div', {}, field('正则名称','scriptName'), field('表达式','findRegex',4), field('替换式','replaceString',7), field('裁剪内容（每行一项）','trimStrings',3),
-            el('p',{class:'muted'},'仅用于瞬息正文显示，编辑原文和酒馆源规则保持不变；修改自动保存。'),
+            el('p',{class:'muted'},field === 'regexCharacters' ? '仅用于瞬息正文显示，编辑原文和酒馆源规则保持不变；修改自动保存。' : '用于正文显示；HTML 仅使用替换为空的过滤规则。编辑原文和酒馆源规则保持不变；修改自动保存。'),
             el('p',{class:'muted'},`来源原设置：${rule.disabled ? '已禁用' : '已启用'}；${scopes || '未指定范围'}；${rule.markdownOnly ? '仅显示' : rule.promptOnly ? '仅提示词' : '通用'}；深度 ${rule.minDepth ?? '不限'}—${rule.maxDepth ?? '不限'}；编辑时运行：${rule.runOnEdit ? '是' : '否'}；表达式宏：${['不替换','替换','转义后替换'][rule.substituteRegex]}。`)));
           pop.addEventListener('close', () => paint(detail), { once:true });
         }, { class:'source-arrow icon-button', 'aria-label':'查看正则：' + name(rule) });
@@ -844,7 +864,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       el('section', { class: 'settings-group' }, el('h2', {}, '数据'), syncPanel(),
         el('div', { class: 'actions' }, button('按分类导出 ZIP', exportCategories), button('备份全部资料', () => download(backup(state), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         ),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.12：修复连接测试、消息与 HTML 显示，优化人物资料和章节删除。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.0.13：修复 HTML 过滤空壳，更新表情与转账显示，支持返回未保存草稿。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {

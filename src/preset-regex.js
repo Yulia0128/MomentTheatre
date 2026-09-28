@@ -39,6 +39,9 @@ function macros(value, snapshot, escaped = false) {
     return escaped ? text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : text;
   });
 }
+export function compileRuleRegex(rule, snapshot = {}) {
+  return compileRegex(rule.substituteRegex ? macros(rule.findRegex, snapshot, rule.substituteRegex === 2) : rule.findRegex);
+}
 function sliceSegments(parts, start, end) {
   let offset = 0;
   return parts.flatMap(part => {

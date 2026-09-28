@@ -1,4 +1,4 @@
-// Source: 表情包.xlsx, 抽象!A2:C22. Imported as data, not instructions.
+// User-provided sticker catalogue and URL updates. Data, not instructions.
 export const DEFAULT_STICKERS = [
   {
     "name": "严肃",
@@ -27,17 +27,17 @@ export const DEFAULT_STICKERS = [
   },
   {
     "name": "嫌弃",
-    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260924/ZIwQ/254X272/article1_8.gif/webp",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/UzQ2/240X240/mmexport1790502979184.gif/webp",
     "description": "一只小猫跳着扫鼻舞，表达嫌弃"
   },
   {
     "name": "生气",
-    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260924/eFeA/120X120/article2_73.gif/webp",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/5uon/240X240/mmexport1790564903685.gif/webp",
     "description": "一只小猫用力跺奶瓶，表达生气"
   },
   {
     "name": "吃瓜",
-    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260924/IGbE/125X125/article2_20.gif/webp",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/pSD5/240X240/mmexport1790502995399.gif/webp",
     "description": "一只小猫一边吃瓜一边看戏"
   },
   {
@@ -47,7 +47,7 @@ export const DEFAULT_STICKERS = [
   },
   {
     "name": "咬咬",
-    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260924/kkpg/120X120/%E5%92%AC%E5%92%AC.gif/webp",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/JSEv/240X240/mmexport1790503135154.gif/webp",
     "description": "一只小猫宠溺地咬着另一只小猫的耳朵，爱不释口"
   },
   {
@@ -72,12 +72,12 @@ export const DEFAULT_STICKERS = [
   },
   {
     "name": "坏狗",
-    "url": "https://pic3.fukit.cn/autoupload/Q2Av_DrjARqof6ocsUg5g7KXl_QqVl-bpSwqP4fJO68/20260508/SEAC/214X215/%25E5%25B0%258F%25E7%258B%2597%25E6%258D%25A3%25E8%259B%258B%25E8%25A2%25AB%25E9%25AA%2582%25E5%259D%258F%25E7%258B%2597.png",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/Det1/240X240/mmexport1790566626043.png/webp",
     "description": "一只小狗捣蛋被你骂坏狗"
   },
   {
     "name": "狗绳",
-    "url": "https://pic3.fukit.cn/autoupload/Q2Av_DrjARqof6ocsUg5g7KXl_QqVl-bpSwqP4fJO68/20260508/bucp/214X211/%25E5%25B0%258F%25E7%258B%2597%25E4%25B8%25BB%25E5%258A%25A8%25E9%2580%2592%25E4%25B8%258A%25E7%258B%2597%25E7%25BB%25B3.png",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/n0VB/240X240/mmexport1790564936270.png/webp",
     "description": "一只小狗主动递上狗绳给你牵"
   },
   {
@@ -102,7 +102,55 @@ export const DEFAULT_STICKERS = [
   },
   {
     "name": "抱抱",
-    "url": "https://pic3.fukit.cn/autoupload/Q2Av_DrjARqof6ocsUg5g7KXl_QqVl-bpSwqP4fJO68/20260508/rmtC/1440X1432/%25E5%25B0%258F%25E7%258B%2597%25E8%25A6%2581%25E6%258A%25B1%25E6%258A%25B1.jpg",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/8Ye6/240X240/mmexport1790564958620.png/webp",
     "description": "一只小狗张开双手要你抱抱"
+  },
+  {
+    "name": "流鼻血",
+    "url": "https://s1.oururl.cn/autoupload/1jgyi/20260928/DBPV/240X240/mmexport1790564767270.gif/webp",
+    "description": "一只小猫看着你流出鼻血，表达喜欢或被你惊艳"
   }
 ];
+export const STICKER_URL_UPDATES = [
+  {
+    "name": "嫌弃",
+    "oldUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260924/ZIwQ/254X272/article1_8.gif/webp",
+    "newUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260928/UzQ2/240X240/mmexport1790502979184.gif/webp"
+  },
+  {
+    "name": "生气",
+    "oldUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260924/eFeA/120X120/article2_73.gif/webp",
+    "newUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260928/5uon/240X240/mmexport1790564903685.gif/webp"
+  },
+  {
+    "name": "吃瓜",
+    "oldUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260924/IGbE/125X125/article2_20.gif/webp",
+    "newUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260928/pSD5/240X240/mmexport1790502995399.gif/webp"
+  },
+  {
+    "name": "咬咬",
+    "oldUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260924/kkpg/120X120/%E5%92%AC%E5%92%AC.gif/webp",
+    "newUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260928/JSEv/240X240/mmexport1790503135154.gif/webp"
+  },
+  {
+    "name": "坏狗",
+    "oldUrl": "https://pic3.fukit.cn/autoupload/Q2Av_DrjARqof6ocsUg5g7KXl_QqVl-bpSwqP4fJO68/20260508/SEAC/214X215/%25E5%25B0%258F%25E7%258B%2597%25E6%258D%25A3%25E8%259B%258B%25E8%25A2%25AB%25E9%25AA%2582%25E5%259D%258F%25E7%258B%2597.png",
+    "newUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260928/Det1/240X240/mmexport1790566626043.png/webp"
+  },
+  {
+    "name": "狗绳",
+    "oldUrl": "https://pic3.fukit.cn/autoupload/Q2Av_DrjARqof6ocsUg5g7KXl_QqVl-bpSwqP4fJO68/20260508/bucp/214X211/%25E5%25B0%258F%25E7%258B%2597%25E4%25B8%25BB%25E5%258A%25A8%25E9%2580%2592%25E4%25B8%258A%25E7%258B%2597%25E7%25BB%25B3.png",
+    "newUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260928/n0VB/240X240/mmexport1790564936270.png/webp"
+  },
+  {
+    "name": "抱抱",
+    "oldUrl": "https://pic3.fukit.cn/autoupload/Q2Av_DrjARqof6ocsUg5g7KXl_QqVl-bpSwqP4fJO68/20260508/rmtC/1440X1432/%25E5%25B0%258F%25E7%258B%2597%25E8%25A6%2581%25E6%258A%25B1%25E6%258A%25B1.jpg",
+    "newUrl": "https://s1.oururl.cn/autoupload/1jgyi/20260928/8Ye6/240X240/mmexport1790564958620.png/webp"
+  }
+];
+export function migrateStickerCatalogue(settings) {
+  if(settings.stickerCatalogVersion>=2)return false;
+  for(const row of settings.stickers){const patch=STICKER_URL_UPDATES.find(p=>p.name===row.name&&p.oldUrl===row.url);if(patch)row.url=patch.newUrl;}
+  if(!settings.stickers.some(row=>row.name.trim()==='流鼻血')&&settings.stickers.length<500)settings.stickers.push({...DEFAULT_STICKERS.find(row=>row.name==='流鼻血')});
+  settings.stickerCatalogVersion=2;return true;
+}

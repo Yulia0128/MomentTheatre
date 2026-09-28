@@ -28,7 +28,8 @@ body.phone-reader,.phone-chapter{background:transparent!important}
 .transfer-card{width:218px;max-width:100%;background:#e99b54;color:#fff;border-radius:9px;white-space:normal}
 .transfer-main{display:flex;gap:12px;align-items:center;padding:15px 14px 10px}
 .transfer-main>div{min-width:0}
-.transfer-main>svg{width:32px;height:32px}.transfer-main strong{display:block;font:500 21px/1.4 system-ui,sans-serif}
+.transfer-main>svg{width:32px;height:32px}.transfer-main strong{display:block;font:500 16px/1.4 system-ui,sans-serif}
+.phone .transfer-main strong{font-size:var(--amount-size,16px)!important;white-space:nowrap;max-width:100%;overflow-x:auto;scrollbar-width:none;line-height:1.4}.transfer-main>div{flex:1;overflow:hidden}
 .transfer-main span{font-size:11px;opacity:.85;display:block;margin-top:2px}
 .bubble .transfer-note{margin:0;padding:0 14px 9px;font-size:11px;opacity:.9}
 .transfer-foot{border-top:1px solid #fff4;font-size:10px;padding:4px 14px;opacity:.85}

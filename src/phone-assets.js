@@ -1,12 +1,6 @@
-// Original inline artwork. Future sticker URL mappings can be added by key here.
+// Phone UI icons; the original placeholder cat stickers have been removed.
 export const STICKER_URLS = Object.freeze({});
-const aliases = { '开心': 'happy', '抱抱': 'hug', '脸红': 'blush', '晚安': 'goodnight' };
-export function builtInSticker(key) {
-  const name = aliases[key] || key;
-  if (!['happy', 'hug', 'blush', 'goodnight'].includes(name)) return '';
-  const eyes = name === 'goodnight' ? '<path d="m31 47 7 2 7-2m20 0 7 2 7-2"/>' : '<path d="m32 48 5-3 5 3m24 0 5-3 5 3"/>';
-  return `<svg class="sticker-art" viewBox="0 0 110 112" fill="none" aria-hidden="true"><path d="M21 36 18 13 40 27Q55 22 70 27L92 13 89 38Q101 48 91 69Q82 81 55 82Q27 81 18 68Q8 49 21 36Z" fill="#faf4e9" stroke="#514a42" stroke-width="2.5"/><g stroke="#514a42" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${eyes}<path d="m51 57 4 3 4-3m-4 3v5m-9-2q4 7 9 2q5 5 9-2"/></g><ellipse cx="29" cy="59" rx="8" ry="4" fill="#e9b4af"/><ellipse cx="81" cy="59" rx="8" ry="4" fill="#e9b4af"/>${name === 'hug' ? '<path d="M26 84Q12 100 33 101L55 91L77 101Q99 100 84 84" stroke="#514a42" stroke-width="3" fill="#faf4e9"/><path d="M55 107 39 93C25 79 45 73 55 85C65 73 85 79 71 93Z" fill="#d88885"/>' : name === 'goodnight' ? '<path d="M88 5h12l-12 9h12M94 21h9l-9 7h9" stroke="#686d8d" stroke-width="2"/>' : '<path d="m7 78 3 5 6 1-5 4 1 6-5-3-5 3 1-6-5-4 6-1Z" fill="#d9b663"/>'}</svg>`;
-}
+export function builtInSticker() { return ''; }
 const paths = {
   plus: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
   transfer: '<circle cx="12" cy="12" r="10"/><path d="M6 8h11m-3-3 3 3-3 3M18 16H7m3-3-3 3 3 3"/>',

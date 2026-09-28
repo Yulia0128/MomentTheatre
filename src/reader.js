@@ -16,7 +16,7 @@ function phoneHtml(messages, characterName) {
     const body = escapeHtml(m.text);
     let inner = body;
     if (m.type === 'voice') inner = `<details class="voice"><summary class="voice-bar"><span class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>${escapeHtml(m.duration || '语音')}</span><span class="voice-hint"><span class="voice-closed">转文字</span><span class="voice-open">收起</span></span></summary><div class="voice-transcript">${body || '暂无转写文字'}</div></details>`;
-    if (m.type === 'transfer') inner = `<div class="transfer-card"><div class="transfer-main">${phoneIcon('transfer')}<div><strong>${escapeHtml(/^[¥￥$€£]/.test(m.amount) ? m.amount : '￥' + m.amount)}</strong><span>${escapeHtml(m.status || '待收款')}</span></div></div>${body ? `<p class="transfer-note">${body}</p>` : ''}<div class="transfer-foot">转账</div></div>`;
+    if (m.type === 'transfer') inner = `<div class="transfer-card"><div class="transfer-main">${phoneIcon('transfer')}<div><strong style="--amount-size:${Math.max(11, Math.min(16, Math.floor(160 / (m.amount.length + 1))))}px">${escapeHtml(/^[¥￥$€£]/.test(m.amount) ? m.amount : '￥' + m.amount)}</strong><span>${escapeHtml(m.status || '待收款')}</span></div></div>${body ? `<p class="transfer-note">${body}</p>` : ''}<div class="transfer-foot">转账</div></div>`;
     if (m.type === 'image') {
       const src = safeImage(m.url);
       inner = src ? `<img class="message-image" src="${escapeHtml(src)}" alt="${body || '图片'}" loading="lazy" referrerpolicy="no-referrer">` : `<div class="image-description">${phoneIcon('image')}<span>${body || '一张图片'}</span></div>`;

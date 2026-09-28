@@ -6,7 +6,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.12';
+export const VERSION = '1.0.13';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -19,7 +19,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   theme: 'day', apiMode: 'main', endpoint: '', model: '', character: '', persona: '', books: [], preset: '',
   readContext: false, contextCount: 10, words: 5000, targetMessages: 50, maxTokens: 60000, stream: true, regexPresets: {}, regexCharacters: {}, bookCharacter: '', characterBooks: {},
   proseTheme: 'prose-stamp', phoneTheme: 'phone-light', launcherEnabled: true, launcher: { x: null, y: null }, models: [], modelsEndpoint: '',
-  personaMode: 'current', customPersonaName: '', customPersonaDescription: '', presetOverrides: {}, bookOverrides: {}, stickers: DEFAULT_STICKERS, stickerCatalogVersion: 1, stickerDraft: null,
+  personaMode: 'current', customPersonaName: '', customPersonaDescription: '', presetOverrides: {}, bookOverrides: {}, stickers: DEFAULT_STICKERS, stickerCatalogVersion: 2, stickerDraft: null,
 });
 export function emptyState() {
   return { schemaVersion: SCHEMA, themeCatalogVersion: 1, settings: clone(DEFAULT_SETTINGS), categories: [], stories: [], themes: [], errors: [], editorDraft: null, draft: { prompt: '', mode: 'prose' } };
@@ -73,11 +73,11 @@ export function normalizeState(raw) {
     edits: Object.fromEntries(Object.entries(config.edits || {}).slice(0, 200).map(([key, rule]) => [key, normalizeRegexRules([{ ...rule, id: key }])[0]])),
   }]));
   state.settings.stickers = normalizeStickers(s.stickers);
-  if (s.stickerCatalogVersion !== 1) {
+  if (![1,2].includes(s.stickerCatalogVersion)) {
     const existing = new Set(state.settings.stickers.map(row => row.name.trim()));
     state.settings.stickers.push(...clone(DEFAULT_STICKERS.filter(row => !existing.has(row.name))));
   }
-  state.settings.stickerCatalogVersion = 1;
+  state.settings.stickerCatalogVersion = s.stickerCatalogVersion === 2 ? 2 : 1;
   if (s.stickerDraft && typeof s.stickerDraft === 'object') {
     const item = normalizeStickers([s.stickerDraft.item])[0];
     const index = Number.isInteger(s.stickerDraft.index) && s.stickerDraft.index >= 0 && s.stickerDraft.index < state.settings.stickers.length ? s.stickerDraft.index : null;

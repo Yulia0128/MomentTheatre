@@ -28,7 +28,7 @@
     "bubble": "#FFFFFF",
     "ownBubble": "#DDE3D8"
   },
-  "css": ".phone { --avatar-size: 32px; --message-gap: 8px; background: #D5D6D1; border-color: #ACAEA6; box-shadow: inset 0 0 0 3px #ffffff80, 0 8px 22px #00000010; } .phone .message-avatar { border-radius: 50%; border: 1px solid #292a271a; } .phone .phone-header { font-family: inherit; border-bottom-color: #292a271f; } .phone .bubble { font-size: 14px; line-height: 1.7; } .phone .message[data-type=text] .bubble { border-radius: 12px 12px 12px 4px; } .phone .message.own[data-type=text] .bubble { border-radius: 12px 12px 4px 12px; } .phone .message-time { color: #6F736A; opacity: 1; } .phone .transfer-card { background: #B97842; color: #FFFFFF; } .phone .messages { scrollbar-color: #A5AA9D transparent; } .phone .messages::-webkit-scrollbar-thumb { background: #A5AA9D; border-radius: 8px; } .phone .call-record { flex-wrap: wrap; line-height: 1.65; } .phone .transfer-main strong { font-variant-numeric: tabular-nums; } .phone .retracted-message, .phone .retract-original, .phone .retract-notice { font: inherit; } .phone .retract-notice { opacity: 0.55; } .phone .bubble { white-space: pre-wrap; overflow-wrap: anywhere; }"
+  "css": ".phone { --avatar-size: 32px; --message-gap: 8px; background: #D5D6D1; border-color: #ACAEA6; box-shadow: inset 0 0 0 3px #ffffff80, 0 8px 22px #00000010; } .phone .message-avatar { border-radius: 50%; border: 1px solid #292a271a; } .phone .phone-header { font-family: inherit; border-bottom-color: #292a271f; } .phone .bubble { font-size: 14px; line-height: 1.7; } .phone .message[data-type=text] .bubble { border-radius: 12px 12px 12px 4px; } .phone .message.own[data-type=text] .bubble { border-radius: 12px 12px 4px 12px; } .phone .message-time { color: #6F736A; opacity: 1; } .phone .transfer-card { background: #B97842; color: #FFFFFF; } .phone .messages { scrollbar-color: #A5AA9D transparent; } .phone .messages::-webkit-scrollbar-thumb { background: #A5AA9D; border-radius: 8px; } .phone .call-record { flex-wrap: wrap; line-height: 1.65; } .phone .transfer-main strong { font-variant-numeric: tabular-nums; } .phone .retracted-message, .phone .retract-original, .phone .retract-notice { font: inherit; } .phone .retract-notice { opacity: 0.55; } .phone .bubble { white-space: pre-wrap; overflow-wrap: anywhere; } .phone .transfer-main strong { font-size: var(--amount-size, 16px) !important; white-space: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: none; }"
 }
 ```
 
@@ -166,7 +166,7 @@ CSS 已被插件限制在当前章节内部。请直接写下面的选择器，�
 
 ## 1.0.7 消息约定
 
-- 默认有 21 条表情，每排 10 个缩略图；点击修改或删除，弹窗填写三字段并保存。表情映射在设置的「小手机表情包」管理，不写入主题 JSON；AI 选择名字，插件固定图片地址。主题仍只负责 `.sticker-image` 的样式。
+- 默认有 22 条表情，每排 10 个缩略图；点击修改或删除，弹窗填写三字段并保存。表情映射在设置的「小手机表情包」管理，不写入主题 JSON；AI 选择名字，插件固定图片地址。主题仍只负责 `.sticker-image` 的样式。
 - 转账只写数字金额与备注，框架补￥和待收款。旧 JSON 数字／字符串金额兼容；无效金额不展示占位文案，原文保留。
 - 语音转写只放实际发言，不写动作、神态或旁白。
 - 撤回适用于全部手机主题：`.retracted-message` 内含 `.retract-notice` 提示和 `.retract-original` 原文。提示和原文的字号必须继承普通消息，不另设较大字号。
@@ -181,3 +181,9 @@ CSS 已被插件限制在当前章节内部。请直接写下面的选择器，�
 ## 1.0.9 角色正则
 
 正文可依次应用预设正则和角色正则，生成的 HTML／CSS 继续使用 `.preset-markup` 结构；仅用于阅读显示，编辑原文完整保留。小手机不应用这两类正文规则，消息变量和组件结构不变，本轮不修改主题 JSON 格式。
+
+## 1.0.13 组件约定
+
+- 已移除 happy／hug／blush／goodnight 的占位小猫。使用用户保存的名字和描述选择表情，图床由框架匹配；内置图库更新为 22 项。
+- 金额使用 `.transfer-main strong`，默认 16px，随数字长度缩至 11px；保留 `--amount-size`，不强制放大。金额保持单行，极长数字可横向滚动查看，不裁掉或改写数值。
+- 撤回只输出一行 `[char|21:03|撤回|哈哈]`，不要再先输出同内容普通消息；原文与撤回提示都由该行显示。
