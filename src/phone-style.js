@@ -36,7 +36,7 @@ body.phone-reader,.phone-chapter{background:transparent!important}
 .image-description{min-height:118px;width:204px;max-width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:var(--bubble);border:1px solid #8882;border-radius:9px;padding:18px 14px;text-align:center}
 .image-description>svg{width:26px;height:26px;opacity:.4}.image-description>span{font-size:12px;opacity:.7;white-space:pre-wrap}
 .bubble .message-image{max-height:260px;object-fit:contain;border-radius:9px}
-.bubble .sticker-image{max-height:132px;max-width:min(132px,100%);object-fit:contain}
+.bubble .sticker-image{border-radius:10px;max-height:132px;max-width:min(132px,100%);object-fit:contain}
 .sticker-built-in{max-width:132px;min-width:72px}.sticker-built-in>svg{width:116px;height:116px;max-width:100%}
 .sticker-fallback{display:block;padding:12px 6px;font-size:17px}
 .location-card,.share-card{width:222px;max-width:100%;background:var(--bubble);border:1px solid #8882;border-radius:9px;overflow:hidden;white-space:normal}

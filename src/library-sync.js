@@ -33,18 +33,23 @@ export function validateShared(raw) {
   return clean;
 }
 export function mergeShared(base,local,remote) {
-  validateShared(local);if(!remote)return {state:clone(local),conflicts:[]};validateShared(remote);
+  validateShared(local);remote ||= clone(local);validateShared(remote);
   base ||= sharedState(emptyState());
   const conflicts=[];
-  const entities = field => {
-    const b=new Map((base[field]||[]).map(x=>[x.id,x])),result=new Map(local[field].map(x=>[x.id,clone(x)]));
-    for(const right of remote[field]){
+  const entities = (field,sides={base,local,remote},remoteIds=null) => {
+    const b=new Map((sides.base[field]||[]).map(x=>[x.id,x])),result=new Map(sides.local[field].map(x=>[x.id,clone(x)]));
+    for(const right of sides.remote[field]){
       const left=result.get(right.id),old=b.get(right.id);
       // Absence never propagates deletion. Recovery is preferred to guessing intent.
       if(!left){result.set(right.id,clone(right));continue;}
+      // Identical works can retain both devices' classifications without a content copy.
+      if(field==='stories' && equalSync({...left,categoryIds:[],tags:[],updatedAt:0},{...right,categoryIds:[],tags:[],updatedAt:0})){
+        result.set(right.id,{...left,categoryIds:[...new Set([...left.categoryIds,...right.categoryIds])],tags:[...new Set([...left.tags,...right.tags])],updatedAt:Math.max(left.updatedAt,right.updatedAt)});continue;
+      }
       if(equalSync(left,right)||equalSync(right,old))continue;
       if(equalSync(left,old)){result.set(right.id,clone(right));continue;}
       const copy=clone(right);copy.id=(field==='themes'?'custom-sync-':'sync-')+sha256(field+canonical(right)).slice(0,48);
+      remoteIds?.set(right.id,copy.id);
       if(!result.has(copy.id)){
         if(field==='stories'){copy.title=(copy.title||'番外').slice(0,100)+' · 同步副本';copy.syncConflict=true;}
         else copy.name=(copy.name||'未命名').slice(0,field==='themes'?50:90)+' · 同步副本';
@@ -53,7 +58,17 @@ export function mergeShared(base,local,remote) {
     }
     return [...result.values()];
   };
-  const state={schemaVersion:1,themeCatalogVersion:1,settings:mergeValue(base.settings,local.settings,remote.settings),stories:entities('stories'),themes:entities('themes'),categories:entities('categories'),draft:mergeValue(base.draft,local.draft,remote.draft)};
+  // Category IDs are device-local identities. Coalesce exact names deterministically,
+  // then translate references BEFORE comparing works or hashing conflict copies.
+  const remoteIds=new Map(),rows=entities('categories',undefined,remoteIds),byName=new Map();
+  for(const row of rows){const current=byName.get(row.name);if(!current||row.id<current.id)byName.set(row.name,row);}
+  const aliases=new Map(rows.map(row=>[row.id,byName.get(row.name).id]));
+  const remap=(side,isRemote=false)=>({...side,stories:side.stories.map(story=>({...story,categoryIds:[...new Set(story.categoryIds.map(key=>{
+    const target=isRemote?(remoteIds.get(key)||key):key;
+    return aliases.get(target)||byName.get(side.categories.find(c=>c.id===key)?.name)?.id||target;
+  }))]}))});
+  const sides={base:remap(base),local:remap(local),remote:remap(remote,true)};
+  const state={schemaVersion:1,themeCatalogVersion:1,settings:mergeValue(base.settings,local.settings,remote.settings),stories:entities('stories',sides),themes:entities('themes'),categories:[...byName.values()],draft:mergeValue(base.draft,local.draft,remote.draft)};
   const stickerMap=rows=>{
     const map=new Map();
     for(const original of rows||[]){
