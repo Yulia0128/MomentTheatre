@@ -44,24 +44,34 @@ export class TavernHost {
   constructor(context, extensionUrl) {
     this.getContext = context; this.extensionUrl = extensionUrl; this.preview = false; this.mainBusy = false; this.disposers = [];
     const c = context();
-    if (!c?.accountStorage || !c?.eventSource) throw new Error('需要 SillyTavern 1.18.0 的扩展接口。');
+    if (!c?.accountStorage || !c?.eventSource) throw new Error('需要 SillyTavern 1.15.0 起提供的原生扩展接口。');
     const scopeKey = 'shunxi.library.scope.v1';
     let scope = c.accountStorage.getItem(scopeKey);
     if (!scope) { scope = id(); c.accountStorage.setItem(scopeKey, scope); }
     this.scope = `tavern:${scope}`;
     this.sessionKey = `shunxi:${scope}:api-key`;
     const on = (name, callback) => { if (!name) return; c.eventSource.on(name, callback); this.disposers.push(() => c.eventSource.removeListener(name, callback)); };
-    // 1.18.0 emits GENERATION_STARTED even during prompt-only dry runs.
+    // SillyTavern 1.15–1.18 emits GENERATION_STARTED during prompt-only dry runs too.
     on(c.eventTypes.GENERATION_STARTED, (_type, _options, dryRun) => { if (!dryRun) this.mainBusy = true; });
     on(c.eventTypes.GENERATION_ENDED, () => { this.mainBusy = false; });
     on(c.eventTypes.GENERATION_STOPPED, () => { this.mainBusy = false; });
   }
   async initialize() {
     const core = await import(new URL('../../../../script.js', this.extensionUrl).href);
-    if (typeof core.isGenerating !== 'function') throw new Error('酒馆缺少 isGenerating 状态接口，需要 1.18.0 或兼容版本。');
+    if (typeof core.isGenerating !== 'function') throw new Error('酒馆缺少 isGenerating 状态接口，请使用 SillyTavern 1.15.0～1.18.x。');
     this.isGenerating = core.isGenerating;
     this.worldInfo = await import(new URL('../../../world-info.js', this.extensionUrl).href);
     this.characterUtils = await import(new URL('../../../utils.js', this.extensionUrl).href);
+  }
+  worldInfoNames(context = this.getContext()) {
+    // 1.18 keeps the public accessor; 1.15–1.17 export the live world_names binding.
+    // Read on every call: imports/additions can replace the array after initialization.
+    // Provenance and runtime limits: docs/API-COMPATIBILITY.md, 1.0.15.
+    const names = typeof context.getWorldInfoNames === 'function'
+      ? context.getWorldInfoNames()
+      : this.worldInfo?.world_names;
+    if (!Array.isArray(names)) throw new Error('酒馆世界书列表尚未就绪，请稍后刷新资料。');
+    return [...names];
   }
   libraryRemote() { return new ServerLibrary(() => this.getContext().getRequestHeaders()); }
   getKey() { try { const saved = localStorage.getItem(this.sessionKey); if (saved) return saved; const previous = sessionStorage.getItem(this.sessionKey) || ''; if (previous) this.setKey(previous); return previous; } catch { return ''; } }
@@ -83,13 +93,13 @@ export class TavernHost {
   }
   async catalog() {
     const c = this.getContext(), p = c.powerUserSettings;
-    if (!Array.isArray(c.characters) || !p || typeof c.getWorldInfoNames !== 'function') throw new Error('酒馆资料接口尚未就绪，请稍后刷新资料。');
+    if (!Array.isArray(c.characters) || !p) throw new Error('酒馆资料接口尚未就绪，请稍后刷新资料。');
     const manager = c.getPresetManager?.('openai');
     const characterSources = await this.characterSources();
     return { characterSources, currentCharacter: characterSources.name || '未打开角色聊天', currentPersona: c.name1 || '我',
       characters: c.characters.map((ch, i) => ({ value: ch.avatar, label: ch.name || `角色 ${i + 1}` })),
       personas: Object.entries(p.personas || {}).map(([value, label]) => ({ value, label })),
-      books: c.getWorldInfoNames().map(name => ({ value: name, label: name })),
+      books: this.worldInfoNames(c).map(name => ({ value: name, label: name })),
       presets: (manager?.getAllPresets() || []).map(name => ({ value: name, label: name })), mainApi: c.mainApi };
   }
   async presetDetail(name) {
@@ -135,7 +145,7 @@ export class TavernHost {
     const character = latest.characters[latest.characterId];
     const filename = this.characterUtils?.getCharaFilename?.(latest.characterId);
     const additional = this.worldInfo?.world_info?.charLore?.find(item => item.name === filename)?.extraBooks || [];
-    const available = new Set(latest.getWorldInfoNames());
+    const available = new Set(this.worldInfoNames(latest));
     const books = [...new Set([character.data?.extensions?.world, ...additional].filter(name => typeof name === 'string' && available.has(name)))];
     return { key, name:character.name || '', books, rules:normalizeRegexRules(character.data?.extensions?.regex_scripts) };
   }
@@ -197,7 +207,7 @@ export class TavernHost {
   }
   async generate({ messages, settings, snapshot, signal, onChunk }) {
     const c = this.getContext(), Service = c.ChatCompletionService;
-    if (!Service?.sendRequest || !Service?.presetToGeneratePayload) throw new Error('当前酒馆缺少 ChatCompletionService，请使用 1.18.0 或兼容版本。');
+    if (!Service?.sendRequest || !Service?.presetToGeneratePayload) throw new Error('当前酒馆缺少 ChatCompletionService，请使用 SillyTavern 1.15.0～1.18.x。');
     let payload;
     if (settings.apiMode === 'independent') {
       if (!settings.model.trim()) throw new Error('请先在独立 API 设置中拉取并选择模型。');

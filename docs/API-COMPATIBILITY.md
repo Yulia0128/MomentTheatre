@@ -204,3 +204,26 @@ HTML 提取与提示词组织在 1.0.12 调整，详见 [HTML 模式](HTML-MODE.
 ## 1.0.13 HTML 过滤
 
 复用现有按名读取预设正则接口，无新宿主接口或权限。HTML 只使用当前选定的空替换预设规则，正文与小手机原有范围不变；细节见 HTML-MODE.md。表情更新在打开本机库后执行一次，不在同步规范化阶段迁移，旧版 1.0.12 的完整同步数据仍能通过校验。
+
+
+## 1.0.15 · SillyTavern 1.15～1.18
+
+2026-09-29：兼容目标扩展至 1.15.0、1.16.0、1.17.0、1.18.0，manifest 最低版本 1.15.0。不支持 1.14，也不承诺未核查的未来版本／修改版。仍是同一份原生扩展，无 Tavern Helper 或服务器插件依赖。
+
+| symbol / surface | applies_to | provenance | confidence / runtime_check |
+| --- | --- | --- | --- |
+| getContext().getWorldInfoNames() / core | 1.18.0 | [st-context.js](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js) | high 源码；优先保留原路径，模拟回归，实机待验收 |
+| world_names / core ESM export | 1.15.0～1.17.0 | [1.15](https://github.com/SillyTavern/SillyTavern/blob/1c0e7ea9556afcc3ae55c888287dff67a6aa42fc/public/scripts/world-info.js)、[1.16](https://github.com/SillyTavern/SillyTavern/blob/e3b866b5d2bcc7fbaa889bb926fbb567cd1ed25b/public/scripts/world-info.js)、[1.17](https://github.com/SillyTavern/SillyTavern/blob/e3f41666c69db032e17e079fcddcf40cf47e8593/public/scripts/world-info.js) | high 源码；实时读取模块绑定并返回副本；实机待验收 |
+| isGenerating()、APP_READY、GENERATION_STARTED(type, options, dryRun) / core | 1.15～1.18 | 各版本 public/script.js、public/scripts/events.js、public/lib/eventemitter.js | high 源码；既有忙碌与 dry-run 处理不变 |
+| ChatCompletionService.presetToGeneratePayload(preset, overridePreset, overridePayload)、sendRequest(data, extractData, signal) / core | 1.15～1.18 | 各版本 public/scripts/custom-request.js；[1.15](https://github.com/SillyTavern/SillyTavern/blob/1.15.0/public/scripts/custom-request.js) | high 源码；沿用主／独立 API、流式／非流式和取消处理；未调用真实供应商 |
+| custom_include_headers / native backend | 1.15～1.18 | 各版本 src/endpoints/backends/chat-completions.js | high 源码；旧版不使用 secret_id，但显式 Authorization 在合并 headers 时覆盖宿主 custom 密钥；原请求不改 |
+| accountStorage、预设／角色 regex_scripts、角色世界书、files upload/verify/user files | 1.15～1.18 | 各版本 st-context.js、preset-manager.js、world-info.js、regex/engine.js、src/endpoints/files.js、src/users.js | high 源码；账号及存储作用域、请求与同步算法不变；真实部署待验收 |
+
+适配只在没有新版世界书名称函数时读取旧版模块；新版函数存在但报错／返回无效值时不吞错回退。每次读取都访问模块的当前 world_names，不能在初始化时解构并缓存旧数组。世界书目录和角色关联筛选共用入口。新版空列表不能回退为旧数据。
+
+1.14 缺少 isGenerating，且同名 presetToGeneratePayload 只有两个参数并仅转换 temperature，因此不通过降低声明或移除状态检查来伪装支持。
+
+验证分层：官方版本源码核查；真实 ESM 导入与模拟上下文单元测试；浏览器模拟宿主和 file:// 单文件预览。以上不等于启动四套官方酒馆或真实供应商 API 验收。低版本首次公测仍按 RUNTIME-CHECKLIST.md 检查。
+
+
+顶部安全区域仍遵循系统 env(safe-area-inset-*)，参考 [WebKit 官方说明](https://webkit.org/blog/7929/designing-websites-for-iphone-x/)。1.0.15 改为顶栏直接留白、显式固定弹窗位置及居中 SVG，不改宿主 viewport。此为依据反馈的布局修正，不宣称已确认具体 WebKit 缺陷或真机修复。

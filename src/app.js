@@ -64,6 +64,16 @@ function mobius() {
   wrapper.innerHTML = `<svg viewBox="0 0 56 36" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="${clipId}"><path d="${ribbon}"/></clipPath></defs><path fill="currentColor" d="${ribbon}"/><g clip-path="url(#${clipId})"><path class="mobius-trail" pathLength="100" d="${track}"/><path class="mobius-spark" pathLength="100" d="${track}"/></g></svg>`;
   return wrapper;
 }
+function windowIcon(kind) {
+  const node = el('span', { class: 'window-icon', 'aria-hidden': 'true' });
+  const paths = kind === 'night'
+    ? '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/>'
+    : kind === 'minimize'
+      ? '<path d="M5 12h14"/>'
+      : '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>';
+  node.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
+  return node;
+}
 export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const previous = document.getElementById('shunxi-extension-root');
   if (previous) return;
@@ -111,9 +121,9 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const content = el('div', { class: 'workspace' });
   const status = el('div', { class: 'status', role: 'status', 'aria-live': 'polite' });
   const nav = el('nav', { class: 'tabs', 'aria-label': '页面' });
-  const themeButton = button(state.settings.theme === 'night' ? '☾' : '☼', toggleTheme, { class: 'icon-button', 'aria-label': '切换日夜模式' });
+  const themeButton = button(windowIcon(state.settings.theme), toggleTheme, { class: 'icon-button', 'aria-label': '切换日夜模式' });
   const header = el('header', { class: 'topbar' }, el('div', { class: 'brand' }, mobius(), el('span', {}, '瞬息')), nav,
-    el('div', { class: 'window-actions' }, themeButton, button('−', () => dialog.close(), { class: 'icon-button', 'aria-label': '收起瞬息，生成继续' })));
+    el('div', { class: 'window-actions' }, themeButton, button(windowIcon('minimize'), () => dialog.close(), { class: 'icon-button', 'aria-label': '收起瞬息，生成继续' })));
   dialog.append(header);
   dialog.append(status, content);
   shadow.append(launcher, dialog); document.body.append(root);
@@ -189,7 +199,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function setLauncherEnabled(value) { state.settings.launcherEnabled = value; launcher.hidden = !value; nativePanel?.sync(value); scheduleSave(); }
   async function action(fn) { if (busyAction) return; busyAction = true; try { await fn(); } catch (e) { report(e); } finally { busyAction = false; } }
   function open() { unread = false; launcher.querySelector('.unread').hidden = true; launcher.classList.remove('complete'); if (!dialog.open) dialog.showModal(); refreshCatalog(false); }
-  function toggleTheme() { state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night'; root.dataset.theme = state.settings.theme; themeButton.textContent = state.settings.theme === 'night' ? '☾' : '☼'; scheduleSave(); }
+  function toggleTheme() { state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night'; root.dataset.theme = state.settings.theme; themeButton.replaceChildren(windowIcon(state.settings.theme)); scheduleSave(); }
   function changeTab(value) { if (editing) { notify('请先保存或取消章节编辑。'); return; } tab = value; render(true); content.scrollTop = 0; }
   function renderNav() { nav.replaceChildren(...[['generate', '番外'], ['library', '分类'], ['themes', '美化'], ['settings', '设置']].map(([value, title]) => button(title, () => changeTab(value), { 'aria-current': value === tab ? 'page' : null, class: value === tab ? 'active' : '' }))); }
   function render(switching = false) {
@@ -910,7 +920,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         state=next;
         if(!state.stories.some(story=>story.id===storyId))storyId=state.stories[0]?.id||null;
         chapterIndex=Math.min(chapterIndex,Math.max(0,(current()?.chapters.length||1)-1));
-        root.dataset.theme=state.settings.theme;themeButton.textContent=state.settings.theme==='night'?'☾':'☼';
+        root.dataset.theme=state.settings.theme;themeButton.replaceChildren(windowIcon(state.settings.theme));
         if(changed&&!disposed)render();
       }
     });
