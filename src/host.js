@@ -10,6 +10,16 @@ export function normalizeEndpoint(value) {
   url.pathname = url.pathname.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '');
   return url.toString().replace(/\/$/, '');
 }
+// TT v2.3.0: request-local proxy credentials avoid secret-store lookup entirely.
+// Only TT uses this branch; see docs/API-COMPATIBILITY.md (1.0.17).
+function independentConnection(endpoint, key) {
+  const url = normalizeEndpoint(endpoint);
+  if (globalThis.window?.__TAURITAVERN__) {
+    return { custom_url: '', reverse_proxy: url, proxy_password: key };
+  }
+  return { custom_url: url, secret_id: 'shunxi-use-explicit-header',
+    custom_include_headers: JSON.stringify({ Authorization: key ? `Bearer ${key}` : '' }) };
+}
 function presetSnapshot(preset) {
   if (!preset) return null;
   const output = {};
@@ -82,8 +92,7 @@ export class TavernHost {
     // Native backend requests /models on the supplied custom endpoint; no browser CORS proxy.
     const response = await fetch('/api/backends/chat-completions/status', {
       method: 'POST', headers: this.getContext().getRequestHeaders(), signal,
-      body: JSON.stringify({ chat_completion_source: 'custom', custom_url: normalizeEndpoint(endpoint),
-        secret_id: 'shunxi-use-explicit-header', custom_include_headers: JSON.stringify({ Authorization: key ? `Bearer ${key}` : '' }) }),
+      body: JSON.stringify({ chat_completion_source: 'custom', ...independentConnection(endpoint, key) }),
     });
     const data = await response.json().catch(() => null);
     if (!response.ok || data?.error) throw Object.assign(new Error(data?.error?.message || data?.message || (response.ok ? '服务商模型列表读取失败，请检查 API 地址、密钥及酒馆服务端日志。' : `拉取模型失败：HTTP ${response.status}`)), { status: response.ok ? undefined : response.status });
@@ -212,9 +221,8 @@ export class TavernHost {
     if (settings.apiMode === 'independent') {
       if (!settings.model.trim()) throw new Error('请先在独立 API 设置中拉取并选择模型。');
       const key = this.getKey();
-      payload = { chat_completion_source: 'custom', custom_url: normalizeEndpoint(settings.endpoint), model: settings.model.trim(),
-        max_tokens: settings.maxTokens, messages, stream: settings.stream !== false, custom_prompt_post_processing: '',
-        secret_id: 'shunxi-use-explicit-header', custom_include_headers: JSON.stringify({ Authorization: key ? `Bearer ${key}` : '' }) };
+      payload = { chat_completion_source: 'custom', ...independentConnection(settings.endpoint, key), model: settings.model.trim(),
+        max_tokens: settings.maxTokens, messages, stream: settings.stream !== false, custom_prompt_post_processing: '' };
       for (const k of ['temperature', 'top_p', 'frequency_penalty', 'presence_penalty']) if (typeof snapshot?.preset?.[k] === 'number') payload[k] = snapshot.preset[k];
     } else {
       if (this.isMainBusy()) throw new Error('正文正在生成。跟随主 API 模式需等待正文结束，或改用独立 API。');

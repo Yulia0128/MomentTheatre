@@ -1,3 +1,4 @@
+import { installLauncherStyle } from './launcher.js';
 import { migrateStickerCatalogue } from './default-stickers.js';
 import { htmlFilterRules } from './html-filters.js';
 import { probeConnection } from './connection-test.js';
@@ -115,7 +116,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   }
   window.addEventListener('message', onReaderMessage);
   shadow.append(el('style', {}, stylesheet));
-  const launcher = button('', () => open(), { class: 'launcher', 'aria-label': '打开瞬息番外小剧场', title: '瞬息 · 拖动可移动，点击打开' });
+  const launcher = button('', () => open(), { id: 'shunxi-floating-launcher', class: 'launcher shunxi-floating-ball', slot: 'launcher', 'data-theme': state.settings.theme, 'aria-label': '打开瞬息番外小剧场', title: '瞬息 · 拖动可移动，点击打开' });
   launcher.append(mobius(), el('span', { class: 'unread', hidden: true }));
   const dialog = el('dialog', { class: 'shell', 'aria-label': '瞬息番外小剧场' });
   const content = el('div', { class: 'workspace' });
@@ -126,7 +127,10 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     el('div', { class: 'window-actions' }, themeButton, button(windowIcon('minimize'), () => dialog.close(), { class: 'icon-button', 'aria-label': '收起瞬息，生成继续' })));
   dialog.append(header);
   dialog.append(status, content);
-  shadow.append(launcher, dialog); document.body.append(root);
+  // A slotted light-DOM button is discoverable by document selectors/hit testing.
+  // Collectors may move this one node; they never move the actual dialog or its styles.
+  const removeLauncherStyle = installLauncherStyle(document);
+  shadow.append(el('slot', { name: 'launcher' }), dialog); root.append(launcher); document.body.append(root);
   const openDropdowns = new Set();
   function setDropdownOpen(menu, open) {
     menu.dataset.open = String(open);
@@ -199,7 +203,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function setLauncherEnabled(value) { state.settings.launcherEnabled = value; launcher.hidden = !value; nativePanel?.sync(value); scheduleSave(); }
   async function action(fn) { if (busyAction) return; busyAction = true; try { await fn(); } catch (e) { report(e); } finally { busyAction = false; } }
   function open() { unread = false; launcher.querySelector('.unread').hidden = true; launcher.classList.remove('complete'); if (!dialog.open) dialog.showModal(); refreshCatalog(false); }
-  function toggleTheme() { state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night'; root.dataset.theme = state.settings.theme; themeButton.replaceChildren(windowIcon(state.settings.theme)); scheduleSave(); }
+  function toggleTheme() { state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night'; root.dataset.theme = launcher.dataset.theme = state.settings.theme; themeButton.replaceChildren(windowIcon(state.settings.theme)); scheduleSave(); }
   function changeTab(value) { if (editing) { notify('请先保存或取消章节编辑。'); return; } tab = value; render(true); content.scrollTop = 0; }
   function renderNav() { nav.replaceChildren(...[['generate', '番外'], ['library', '分类'], ['themes', '美化'], ['settings', '设置']].map(([value, title]) => button(title, () => changeTab(value), { 'aria-current': value === tab ? 'page' : null, class: value === tab ? 'active' : '' }))); }
   function render(switching = false) {
@@ -855,7 +859,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       confirm('恢复备份', `将替换当前资料库为 ${incoming.stories.length} 篇番外、${incoming.categories.length} 个分类。恢复前会自动下载当前备份。`, async () => {
         if (task) throw new Error('请先停止生成再恢复备份。');
         download(backup(state), `瞬息-恢复前备份-${Date.now()}.json`, 'application/json');
-        await store.save(incoming,{syncMeta:null}); state = incoming; storyId = state.stories[0]?.id || null; root.dataset.theme = state.settings.theme; launcher.hidden = !state.settings.launcherEnabled; nativePanel?.sync(state.settings.launcherEnabled); render(); notify('备份已恢复。');
+        await store.save(incoming,{syncMeta:null}); state = incoming; storyId = state.stories[0]?.id || null; root.dataset.theme = launcher.dataset.theme = state.settings.theme; launcher.hidden = !state.settings.launcherEnabled; nativePanel?.sync(state.settings.launcherEnabled); render(); notify('备份已恢复。');
       });
     }) });
     return el('section', { class: 'page settings-page' }, el('div', { class: 'page-heading' }, el('h1', {}, '设置'), button('刷新酒馆资料', () => refreshCatalog(), { class: 'text-button' })),
@@ -885,17 +889,23 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     }), { class: 'primary' })]);
   }
   function placeLauncher() {
+    if (launcher.parentElement !== root) return; // The collector owns docked positioning.
     const position = state.settings.launcher, size = 32;
     const x = Math.max(8, Math.min(innerWidth - size - 8, position.x ?? innerWidth - size - 18));
     const y = Math.max(8, Math.min(innerHeight - size - 8, position.y ?? innerHeight * 0.65));
     launcher.style.left = `${x}px`; launcher.style.top = `${y}px`;
   }
   let drag = null, wasDragged = false;
-  launcher.addEventListener('pointerdown', e => { if (e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, left: parseFloat(launcher.style.left), top: parseFloat(launcher.style.top) }; wasDragged = false; launcher.setPointerCapture(e.pointerId); });
-  launcher.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) < 6 && !wasDragged) return; wasDragged = true; state.settings.launcher = { x: drag.left + dx, y: drag.top + dy }; placeLauncher(); });
+  launcher.addEventListener('pointerdown', e => { if (e.button !== 0 || launcher.parentElement !== root) return; drag = { x: e.clientX, y: e.clientY, left: parseFloat(launcher.style.left), top: parseFloat(launcher.style.top) }; wasDragged = false; launcher.setPointerCapture(e.pointerId); });
+  launcher.addEventListener('pointermove', e => { if (!drag || launcher.parentElement !== root) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) < 6 && !wasDragged) return; wasDragged = true; state.settings.launcher = { x: drag.left + dx, y: drag.top + dy }; placeLauncher(); });
   launcher.addEventListener('pointerup', () => { if (wasDragged) scheduleSave(); drag = null; });
   launcher.addEventListener('pointercancel', () => { drag = null; });
   launcher.addEventListener('click', e => { if (wasDragged) { e.stopImmediatePropagation(); e.preventDefault(); wasDragged = false; } }, true);
+  const launcherObserver = new MutationObserver(() => {
+    drag = null; wasDragged = false;
+    if (launcher.parentElement === root) placeLauncher();
+  });
+  launcherObserver.observe(root, { childList: true });
   const flushInputs = () => { try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
   const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { flushInputs(); persist().catch(report); } };
   const beforeUnload = e => { flushInputs(); if (task || editing) { e.preventDefault(); e.returnValue = ''; } };
@@ -920,7 +930,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         state=next;
         if(!state.stories.some(story=>story.id===storyId))storyId=state.stories[0]?.id||null;
         chapterIndex=Math.min(chapterIndex,Math.max(0,(current()?.chapters.length||1)-1));
-        root.dataset.theme=state.settings.theme;themeButton.replaceChildren(windowIcon(state.settings.theme));
+        root.dataset.theme=launcher.dataset.theme=state.settings.theme;themeButton.replaceChildren(windowIcon(state.settings.theme));
         if(changed&&!disposed)render();
       }
     });
@@ -929,5 +939,5 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   host.onCharacterChange?.(() => { refreshCatalog(false); });
   await refreshCatalog(false);
   if (preview) open();
-  return { open, async dispose() { disposed = true; sync?.dispose(); stop(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); root.remove(); } };
+  return { open, async dispose() { disposed = true; sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
 }

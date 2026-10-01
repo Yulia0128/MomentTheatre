@@ -227,3 +227,26 @@ HTML 提取与提示词组织在 1.0.12 调整，详见 [HTML 模式](HTML-MODE.
 
 
 顶部安全区域仍遵循系统 env(safe-area-inset-*)，参考 [WebKit 官方说明](https://webkit.org/blog/7929/designing-websites-for-iphone-x/)。1.0.15 改为顶栏直接留白、显式固定弹窗位置及居中 SVG，不改宿主 viewport。此为依据反馈的布局修正，不宣称已确认具体 WebKit 缺陷或真机修复。
+
+
+## 1.0.16 · 悬浮入口收纳兼容
+
+surface：宿主页面普通 DOM 的唯一 button#shunxi-floating-launcher（class launcher shunxi-floating-ball）；父容器为 #shunxi-extension-root，使用命名 slot 显示。仅按钮暴露在普通 DOM，主体仍处在原 open ShadowRoot。无新增酒馆 API、Tavern Helper 依赖或收纳插件私有注册接口。
+
+provenance：用户提供的 -_jessica_2.json，2026-09-30 读取。自动扫描 document.querySelectorAll，按 fixed、尺寸、圆角筛选；手动通过 document.elementsFromPoint 及父元素找候选；ct/q/G/V 管理搬移、样式保护、恢复。第三方脚本不修改、不分发。文件 SHA256 与验证结果见 .artifacts/release-1.0.16/collector-result.json。
+
+圆形 border-radius 仅用于透明点击区域，视觉仍为莫比乌斯。样式全部限定到该唯一 ID，避免依赖原隔离层的样式继承；入口搬移后继续复用原点击闭包、busy/complete/unread 状态、日夜与隐藏设置。收纳位置由外部工具管理，瞬息通过按钮父节点判断是否暂停自身拖动与 placeLauncher；原父节点的窄范围 MutationObserver 负责释放后的坐标重设。卸载主动删除入口，即使入口已在收纳面板中。
+
+confidence：源码高；隔离浏览器使用附件原始识别／搬移／释放函数，模拟收纳 store、容器及基于稳定 ID 的恢复。没有加载完整酒馆助手／Vue 收纳 UI，也没有在真实用户酒馆联合验收，不宣称所有收纳插件都兼容。
+
+
+## 1.0.17 · TauriTavern 独立 API 认证
+
+- surface：原生宿主页面中的 `window.__TAURITAVERN__` 检测，仅为真时选择 TT 分支。不是通用 Tauri 检测，不依赖酒馆助手，也不改变跟随主 API。
+- applies_to：TT v2.3.0，提交 `a1855be4a4f8b6ee7cd0374a84dbb3709c3e5375`。尚未在用户实际安装的 TT 与供应商上验收，不推断所有历史 TT 版本或受限发行版均支持。
+- provenance：[官方宿主检测](https://github.com/Darkatse/TauriTavern/blob/a1855be4a4f8b6ee7cd0374a84dbb3709c3e5375/ExtensionDEV.md#L46-L65)；[模型列表／生成共用配置与密钥分支](https://github.com/Darkatse/TauriTavern/blob/a1855be4a4f8b6ee7cd0374a84dbb3709c3e5375/src-tauri/crates/tt-application/src/services/chat_completion_service/config.rs#L87-L242)；[TT 自带请求凭据测试](https://github.com/Darkatse/TauriTavern/blob/a1855be4a4f8b6ee7cd0374a84dbb3709c3e5375/src-tauri/crates/tt-application/src/services/chat_completion_service/config.rs#L1408-L1435)。
+- symbol/contract：仍使用原 `/api/backends/chat-completions/status` 和 `ChatCompletionService.sendRequest`，`chat_completion_source: custom`；仅 TT 把规范化独立地址放入 `reverse_proxy`、独立密钥放入 `proxy_password`、`custom_url` 置空，不传占位 `secret_id`。这是 TT 内部字段名，请求目标仍是用户填写的站点，不增加第三方代理。
+- TT 此分支直接使用本次请求的密码，不调用 secret repository；空密钥也不回退到主密钥。不创建、切换或删除宿主秘密记录，不改变瞬息密钥的存储方式。
+- 不采用“只删除 secret_id”：TT 会忽略值为空的额外请求头，可能让未填独立密钥的请求继承宿主 custom 密钥。使用请求内凭据分支避免该问题。
+- 非 TT 保留旧 `custom_url`、占位 `secret_id`、`custom_include_headers` 的值；跟随主 API 继续由宿主 `presetToGeneratePayload` 组装。
+- confidence：源码契约 high；runtime_check：`tests/tt-api.test.js` 覆盖原错误复现、模型列表、实际连接测试入口、流式／非流式生成、空密钥隔离、401／取消传播、原版精确参数回归及两种宿主的主 API 不变。测试使用模拟宿主，不能替代 TT 真机验收。
