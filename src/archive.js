@@ -8,7 +8,7 @@ export function crc32(bytes) { let c = 0xffffffff; for (const b of bytes) c = cr
 function concat(parts) { const result = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let offset = 0; for (const p of parts) { result.set(p, offset); offset += p.length; } return result; }
 function header(size) { const bytes = new Uint8Array(size); return [bytes, new DataView(bytes.buffer)]; }
 // ZIP STORE: UTF-8 filenames and CRC32; no CDN, native binary ZIP readable by standard unzip tools.
-export function makeZip(files) {
+export function makeZip(files, { blob = false } = {}) {
   if (files.length > 65000) throw new Error('导出文件过多，请分批选择分类。');
   const local = [], central = []; let offset = 0;
   for (const file of files) {
@@ -23,7 +23,7 @@ export function makeZip(files) {
     central.push(ch, name); offset += lh.length + name.length + data.length;
   }
   const directory = concat(central), [end, e] = header(22); e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, directory.length, true); e.setUint32(16, offset, true);
-  return concat([...local, directory, end]);
+  return blob ? new Blob([...local, directory, end], { type: 'application/zip' }) : concat([...local, directory, end]);
 }
 export function safeName(value) {
   let result = String(value).normalize('NFC').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').slice(0, 80).replace(/[. ]+$/g, '');

@@ -1,4 +1,5 @@
 import { recoverStoryTitle } from './story-title.js';
+import { phoneAppearance as normalizePhoneAppearance } from './phone-appearance.js';
 import { normalizeStickers } from './phone-format.js';
 import { DEFAULT_STICKERS } from './default-stickers.js';
 import { normalizeRegexRules } from './preset-regex.js';
@@ -6,7 +7,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.0.17';
+export const VERSION = '1.1.4';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -22,19 +23,19 @@ export const DEFAULT_SETTINGS = Object.freeze({
   personaMode: 'current', customPersonaName: '', customPersonaDescription: '', presetOverrides: {}, bookOverrides: {}, stickers: DEFAULT_STICKERS, stickerCatalogVersion: 2, stickerDraft: null,
 });
 export function emptyState() {
-  return { schemaVersion: SCHEMA, themeCatalogVersion: 1, settings: clone(DEFAULT_SETTINGS), categories: [], stories: [], themes: [], errors: [], editorDraft: null, draft: { prompt: '', mode: 'prose' } };
+  return { schemaVersion: SCHEMA, themeCatalogVersion: 1, settings: clone(DEFAULT_SETTINGS), categories: [], stories: [], scripts: [], scriptDrafts: [], themes: [], errors: [], editorDraft: null, draft: { prompt: '', mode: 'prose' } };
 }
 export function newStory({ title, prompt, mode, themeId, snapshot }) {
   return { id: id(), title: text(title, 120) || '未命名番外', prompt: text(prompt), mode: normalizeMode(mode),
     themeId, snapshot: clone(snapshot), chapters: [], categoryIds: [], tags: [], saved: false,
     continuationDraft: '', continuationMode: mode === 'html' ? '' : normalizeMode(mode), summaries: [], createdAt: Date.now(), updatedAt: Date.now() };
 }
-export function appendChapter(story, { content, instruction = '', complete = true, mode = story.mode, themeId = story.themeId, readingTheme = null, wordCount = 0, targetWords = 0, messageCount = 0, targetMessages = 0, sourceContent = '', readingRegex = [] }) {
+export function appendChapter(story, { content, instruction = '', complete = true, mode = story.mode, themeId = story.themeId, readingTheme = null, phoneAppearance, wordCount = 0, targetWords = 0, messageCount = 0, targetMessages = 0, sourceContent = '', readingRegex = [] }) {
   if (!text(content).trim()) throw new Error('没有可保存的生成内容。');
   if ((story.mode === 'html' || mode === 'html') && (story.mode !== 'html' || mode !== 'html' || story.chapters.length)) throw new Error('HTML 作品独立保存，不支持续写或混合章节。');
   const last = story.chapters.at(-1);
   if (last && !last.complete) throw new Error('请先整理未完成的最后一节，再继续续写。');
-  story.chapters.push({ id: id(), content: text(content), sourceContent: text(sourceContent), readingRegex: normalizeRegexRules(readingRegex), instruction: text(instruction), complete, mode, themeId, readingTheme: mode !== 'html' && readingTheme ? captureReadingTheme(readingTheme, mode) : null, wordCount, targetWords, messageCount, targetMessages, createdAt: Date.now() });
+  story.chapters.push({ id: id(), content: text(content), sourceContent: text(sourceContent), readingRegex: normalizeRegexRules(readingRegex), instruction: text(instruction), complete, mode, themeId, readingTheme: mode !== 'html' && readingTheme ? captureReadingTheme(readingTheme, mode) : null, ...(mode === 'phone' && phoneAppearance !== undefined ? { phoneAppearance: normalizePhoneAppearance(phoneAppearance) } : {}), wordCount, targetWords, messageCount, targetMessages, createdAt: Date.now() });
   story.continuationMode = mode === 'html' ? '' : mode;
   story.updatedAt = Date.now();
   return story;
@@ -62,6 +63,8 @@ export function normalizeState(raw) {
   assert(raw && typeof raw === 'object' && raw.schemaVersion === SCHEMA, '此资料版本不受当前插件支持，请更新插件；原数据未覆盖。');
   const state = emptyState();
   const s = raw.settings ?? {};
+  // Optional on legacy states: adding defaults would invalidate old sync snapshots.
+  if (Object.hasOwn(s, 'phoneAppearance')) state.settings.phoneAppearance = normalizePhoneAppearance(s.phoneAppearance);
   for (const key of ['endpoint', 'model', 'character', 'persona', 'preset', 'proseTheme', 'phoneTheme']) state.settings[key] = text(s[key], 2000) || DEFAULT_SETTINGS[key];
   state.settings.theme = s.theme === 'night' ? 'night' : 'day';
   state.settings.apiMode = s.apiMode === 'independent' ? 'independent' : 'main';
@@ -108,10 +111,24 @@ export function normalizeState(raw) {
     return { id: key, name: text(c.name, 120).trim() || '未命名分类' };
   });
   const storyIds = new Set();
+  const scriptIds = new Set();
+  state.scripts = list(raw.scripts ?? [], 10000, '剧本').map(s => {
+    const key = safeId(s.id); assert(!scriptIds.has(key), '剧本标识重复。'); scriptIds.add(key);
+    return { id: key, title: text(s.title, 120), content: text(s.content), tags: strings(s.tags, 100),
+      mode: ['prose', 'phone', 'html'].includes(s.mode) ? s.mode : 'any',
+      createdAt: Number(s.createdAt) || 1, updatedAt: Number(s.updatedAt) || 1, syncConflict: s.syncConflict === true };
+  });
+  const scriptDraftIds = new Set();
+  state.scriptDrafts = list(raw.scriptDrafts ?? [], 10000, '剧本草稿').map(d => {
+    const key = safeId(d.id); assert(!scriptDraftIds.has(key), '剧本草稿标识重复。'); scriptDraftIds.add(key);
+    return { id: key, scriptId: text(d.scriptId, 100), title: text(d.title, 120), content: text(d.content), tagsText: text(d.tagsText, 10000),
+      mode: ['prose', 'phone', 'html'].includes(d.mode) ? d.mode : 'any' };
+  });
   state.themes = list(raw.themes ?? [], 100, '主题').map(theme => validateTheme(theme));
   state.stories = list(raw.stories ?? [], 10000, '番外').map(s => {
     const key = safeId(s.id); assert(!storyIds.has(key), '番外标识重复。'); storyIds.add(key);
     const chapters = list(s.chapters, 2000, '章节').map(c => ({ id: safeId(c.id), content: text(c.content), sourceContent: text(c.sourceContent), readingRegex: normalizeRegexRules(c.readingRegex), stickerSnapshot: normalizeStickers(c.stickerSnapshot), instruction: text(c.instruction), complete: c.complete !== false,
+      ...(Object.hasOwn(c, 'phoneAppearance') ? { phoneAppearance: normalizePhoneAppearance(c.phoneAppearance) } : {}),
       mode: normalizeMode(c.mode || s.mode), themeId: text(c.themeId || s.themeId, 100), wordCount: Number(c.wordCount) || 0, targetWords: Number(c.targetWords) || 0,
       readingTheme: normalizeMode(c.mode || s.mode) === 'html' ? null : captureReadingTheme(c.readingTheme || (raw.themeCatalogVersion === 1 ? resolveTheme : resolveLegacyTheme)(state, normalizeMode(c.mode || s.mode), c.themeId || s.themeId), normalizeMode(c.mode || s.mode)),
       messageCount: Number(c.messageCount) || 0, targetMessages: Number(c.targetMessages) || 0, createdAt: Number(c.createdAt) || Date.now() }));

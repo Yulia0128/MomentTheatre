@@ -7,7 +7,7 @@ const amountPattern = /^(?:[¥￥$€£]\s*)?\d[\d,]*(?:\.\d+)?(?:\s*(?:元|人�
 const durationPattern = /^\d{1,3}:\d{2}(?::\d{2})?$|^\d+(?:[″"秒]|分钟|分)$/;
 const callLabels = { 发起语音: ['call', '发起'], 接受语音: ['call', '已接受'], 拒绝语音: ['call', '已拒绝'], 结束语音: ['call', '已结束'], 发起视频: ['video', '发起'], 接受视频: ['video', '已接受'], 拒绝视频: ['video', '已拒绝'], 结束视频: ['video', '已结束'] };
 const lookup = (map, key) => Object.hasOwn(map, key) ? map[key] : '';
-const typeOf = v => PHONE_TYPES.includes(v) ? v : Object.keys(labels).find(k => labels[k] === v) || lookup({ 表情包: 'sticker', recall: 'retract', withdrawn: 'retract' }, v);
+const typeOf = v => PHONE_TYPES.includes(v) ? v : Object.keys(labels).find(k => labels[k] === v) || lookup({ 普通文字: 'text', 表情包: 'sticker', recall: 'retract', withdrawn: 'retract' }, v);
 const senderOf = (v, names = {}) => lookup({ user: 'user', char: 'char', assistant: 'char', system: 'system', 我: 'user', 用户: 'user', 角色: 'char' }, v) || (v && v === names.persona ? 'user' : v && v === names.character ? 'char' : '');
 export function safeStickerUrl(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : ''; } catch { return ''; }
@@ -73,7 +73,11 @@ function lineMessage(line, names) {
   if (parts.length === 4 && amountPattern.test(token)) return { sender, time: parts[1].trim(), type: 'transfer', amount: token, text: parts[3] };
   const call = lookup(callLabels, token);
   if (call) return { sender, time: parts[1].trim(), type: call[0], status: call[1], duration: parts.slice(3).filter(v => v.trim()).join('').trim() };
-  const explicitType = (parts.length > 3 || ['call', 'video'].includes(typeOf(token))) && typeOf(token);
+  // Treat the legacy placeholder as a type only when there is actual speech
+  // after a separate delimiter. Three-field speech and escaped pipes stay literal.
+  const explicitType = token === '普通文字'
+    ? parts.length > 3 && parts.slice(3).some(value => value.trim()) && 'text'
+    : (parts.length > 3 || ['call', 'video'].includes(typeOf(token))) && typeOf(token);
   const type = explicitType || 'text';
   const values = parts.slice(explicitType ? 3 : 2), keys = fields[type];
   const item = { sender, type, time: parts[1].trim() };
@@ -282,7 +286,8 @@ export function phonePrompt(library = []) {
   return `【小手机消息】只在 <小手机> 和 </小手机> 之间输出消息，不写作品标题，不加代码围栏。每行一条，sender 是 char（角色）或 user（我方）；system 只用于双方通话结束等系统记录。
 框架会把以下短格式自动显示成消息组件。你需要根据剧情实际输出发起、接受、拒绝、撤回等事件；这些不是用户点击按钮触发的操作。格式如下：
 <小手机>
-[char|23:48|普通文字]
+[char|23:48|到家了吗？]
+[user|23:48|刚到，正准备给你发消息。]
 [char|23:49|语音|12″|只写实际说出口的话，禁止动作、神态、旁白、括号或星号动作]
 [char|23:49|52.00|明天的咖啡]
 [user|23:50|表情|表情包名字]
@@ -296,6 +301,7 @@ export function phonePrompt(library = []) {
 [system|23:56|结束视频|03:12]
 [char|23:57|撤回|撤回前的原消息]
 </小手机>
+普通消息固定三段：[发送人|时间|实际对话内容]，例如 [char|22:16|接电话。]。不要在对话前添加“普通文字”“文字”或“text”类型字段；以上真实对话只是格式示例，请按当前剧情写内容。
 转账固定四段：发送人、时间、纯数字金额、备注；不写转账类型、￥符号或待收款，插件自动补齐。备注可以留空。
 通话固定用发起语音／接受语音／拒绝语音／结束语音或对应的视频词。发起和响应分开输出，拒绝或接受由响应者发送；结束时才添加可选时长，不写空的状态字段或多余竖线。
 撤回只占一条消息：只输出 [char|21:03|撤回|哈哈]，不得先输出 [char|21:03|哈哈] 再输出撤回行。准备撤回的原消息直接写入撤回行的最后一段，框架会同时显示原文与已撤回提示；也不要另写“撤回了一条消息”的普通文字行。撤回和通话回应适用于全部手机主题。

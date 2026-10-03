@@ -1,17 +1,19 @@
 import {emptyState,normalizeState,clone,id} from './model.js';
 import {canonical,sha256} from './sync-integrity.js';
+import {limitDraftStories} from './draft-retention.js';
 
 export const LOCAL_SETTINGS = ['launcher','launcherEnabled','character','persona','books','bookCharacter','stickerDraft'];
 export const equalSync = (a,b) => canonical(a) === canonical(b);
 export function sharedState(state) {
   const clean = normalizeState(state);
   for (const key of LOCAL_SETTINGS) delete clean.settings[key];
-  return Object.fromEntries(['schemaVersion','themeCatalogVersion','settings','stories','categories','themes','draft'].map(key => [key,clean[key]]));
+  // Preserve the exact legacy shape for its checksum and lossless validation.
+  return Object.fromEntries(['schemaVersion','themeCatalogVersion','settings','stories','categories','themes','draft', ...(Object.hasOwn(state,'scripts') ? ['scripts'] : [])].map(key => [key,clean[key]]));
 }
 export function applyShared(local,shared) {
   const settings = {...shared.settings};
   for (const key of LOCAL_SETTINGS) settings[key] = clone(local.settings[key]);
-  return normalizeState({...shared,settings,errors:local.errors,editorDraft:local.editorDraft});
+  return normalizeState({...shared,settings,errors:local.errors,editorDraft:local.editorDraft,scriptDrafts:local.scriptDrafts});
 }
 const plain = value => value && typeof value === 'object' && !Array.isArray(value);
 function mergeValue(base,local,remote) {
@@ -35,6 +37,7 @@ export function validateShared(raw) {
 export function mergeShared(base,local,remote) {
   validateShared(local);remote ||= clone(local);validateShared(remote);
   base ||= sharedState(emptyState());
+  base={...base,scripts:base.scripts||[]};local={...local,scripts:local.scripts||[]};remote={...remote,scripts:remote.scripts||[]};
   const conflicts=[];
   const entities = (field,sides={base,local,remote},remoteIds=null) => {
     const b=new Map((sides.base[field]||[]).map(x=>[x.id,x])),result=new Map(sides.local[field].map(x=>[x.id,clone(x)]));
@@ -46,12 +49,15 @@ export function mergeShared(base,local,remote) {
       if(field==='stories' && equalSync({...left,categoryIds:[],tags:[],updatedAt:0},{...right,categoryIds:[],tags:[],updatedAt:0})){
         result.set(right.id,{...left,categoryIds:[...new Set([...left.categoryIds,...right.categoryIds])],tags:[...new Set([...left.tags,...right.tags])],updatedAt:Math.max(left.updatedAt,right.updatedAt)});continue;
       }
+      if(field==='scripts' && equalSync({...left,tags:[],updatedAt:0},{...right,tags:[],updatedAt:0})){
+        result.set(right.id,{...left,tags:[...new Set([...left.tags,...right.tags])],updatedAt:Math.max(left.updatedAt,right.updatedAt)});continue;
+      }
       if(equalSync(left,right)||equalSync(right,old))continue;
       if(equalSync(left,old)){result.set(right.id,clone(right));continue;}
       const copy=clone(right);copy.id=(field==='themes'?'custom-sync-':'sync-')+sha256(field+canonical(right)).slice(0,48);
       remoteIds?.set(right.id,copy.id);
       if(!result.has(copy.id)){
-        if(field==='stories'){copy.title=(copy.title||'番外').slice(0,100)+' · 同步副本';copy.syncConflict=true;}
+        if(field==='stories'||field==='scripts'){copy.title=(copy.title||(field==='scripts'?'剧本':'番外')).slice(0,100)+' · 同步副本';copy.syncConflict=true;}
         else copy.name=(copy.name||'未命名').slice(0,field==='themes'?50:90)+' · 同步副本';
         result.set(copy.id,copy);conflicts.push({field,id:copy.id});
       }
@@ -68,7 +74,7 @@ export function mergeShared(base,local,remote) {
     return aliases.get(target)||byName.get(side.categories.find(c=>c.id===key)?.name)?.id||target;
   }))]}))});
   const sides={base:remap(base),local:remap(local),remote:remap(remote,true)};
-  const state={schemaVersion:1,themeCatalogVersion:1,settings:mergeValue(base.settings,local.settings,remote.settings),stories:entities('stories',sides),themes:entities('themes'),categories:[...byName.values()],draft:mergeValue(base.draft,local.draft,remote.draft)};
+  const state={schemaVersion:1,themeCatalogVersion:1,settings:mergeValue(base.settings,local.settings,remote.settings),stories:entities('stories',sides),scripts:entities('scripts'),themes:entities('themes'),categories:[...byName.values()],draft:mergeValue(base.draft,local.draft,remote.draft)};
   const stickerMap=rows=>{
     const map=new Map();
     for(const original of rows||[]){
@@ -121,6 +127,7 @@ export class LibrarySync {
       check();
       if(direction==='download'&&!record.state){this.setStatus('idle','服务器还没有同步资料，请先在有资料的设备上传。');return;}
       const merged=mergeShared(this.store.syncMeta?.base,local,record.state);
+      merged.state=limitDraftStories(merged.state);
       // Commit recovery + merged state atomically BEFORE publishing. Failed persistence
       // cannot publish an incomplete library, nor replace the application's live state.
       await this.apply(merged.state,{base:record.state},guard);
@@ -128,7 +135,9 @@ export class LibrarySync {
       let result=record;
       if(direction==='upload'){
         const publishedGuard={expectedRevision:this.store.revision,expectedSequence:this.store.sequence};
-        const stillCurrent=()=>!this.disposed&&this.canApply()&&publishedGuard.expectedRevision===this.store.revision&&publishedGuard.expectedSequence===this.store.sequence&&equalSync(sharedState(this.getState()),merged.state);
+        // Per-block checks use the revision/input guards. Comparing the entire
+        // library for every block would turn large uploads into quadratic work.
+        const stillCurrent=(full=true)=>!this.disposed&&this.canApply()&&publishedGuard.expectedRevision===this.store.revision&&publishedGuard.expectedSequence===this.store.sequence&&(!full||equalSync(sharedState(this.getState()),merged.state));
         result=await this.remote.push(record,merged.state,stillCurrent);
         if(!stillCurrent())throw new Error('服务器快照已保留，本机随后有新修改，请再次同步。');
         await this.store.save(this.getState(),{syncMeta:{base:merged.state,lastUpload:result.current},...publishedGuard});

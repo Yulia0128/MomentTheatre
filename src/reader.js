@@ -1,4 +1,5 @@
 import { cardToken, readerBridge } from './regex-card.js';
+import { phoneAppearance } from './phone-appearance.js';
 import { builtInSticker, STICKER_URLS, phoneIcon, virtualMap } from './phone-assets.js';
 import { PHONE_CSS } from './phone-style.js';
 import { PROSE_CSS } from './prose.js';
@@ -10,9 +11,14 @@ import { parsePhone, resolveMessageStickers } from './phone-format.js';
 export function safeImage(value) {
   try { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password || /^data:image\/(png|jpeg|gif|webp);base64,/i.test(value) ? value : ''; } catch { return ''; }
 }
-function phoneHtml(messages, characterName) {
+function phoneHtml(messages, characterName, appearance, chapterNumber) {
+  const look = phoneAppearance(appearance);
+  characterName = look.remark || characterName;
+  // Large data URLs can exceed the browser's custom-property value limit.
+  // One scoped image declaration per side avoids that limit and duplication per message.
+  const avatars = [['.own', look.userAvatar], [':not(.own)', look.charAvatar]].filter(([, url]) => url).map(([side, url]) => `.phone .message${side} .message-avatar{background-image:url("${url.replace(/["\\<>]/g, c => '\\' + c.charCodeAt(0).toString(16) + ' ')}")!important}`).join('');
   const clock = messages.find(m => m.time)?.time?.match(/\d{1,2}:\d{2}/)?.[0] || '09:41';
-  return `<div class="phone"><div class="phone-screen"><div class="phone-status"><span>${escapeHtml(clock)}</span><span class="phone-island" aria-hidden="true"></span><span class="phone-battery" aria-hidden="true"><i></i></span></div><div class="phone-header" style="display:grid!important;grid-template-columns:24px minmax(0,1fr) 24px!important;column-gap:8px!important;padding-inline:17px!important;direction:ltr!important"><span class="phone-back" aria-hidden="true" style="grid-column:1!important;grid-row:1!important;text-align:left!important">‹</span><div class="phone-contact" style="grid-column:2!important;grid-row:1!important;text-align:center!important;min-width:0!important;width:100%!important;margin-inline:0!important;position:static!important;transform:none!important" title="${escapeHtml(characterName)}">${escapeHtml(characterName)}</div></div><div class="messages" tabindex="0" role="region" aria-label="手机消息，可在屏幕内滚动">${messages.map(m => {
+  return `${avatars ? `<style>@scope ([data-chapter="${chapterNumber}"]) { ${avatars} }</style>` : ''}<div class="phone"><div class="phone-screen"><div class="phone-status"><span>${escapeHtml(clock)}</span><span class="phone-island" aria-hidden="true"></span><span class="phone-battery" aria-hidden="true"><i></i></span></div><div class="phone-header" style="display:grid!important;grid-template-columns:24px minmax(0,1fr) 24px!important;column-gap:8px!important;padding-inline:17px!important;direction:ltr!important"><span class="phone-back" aria-hidden="true" style="grid-column:1!important;grid-row:1!important;text-align:left!important">‹</span><div class="phone-contact" style="grid-column:2!important;grid-row:1!important;text-align:center!important;min-width:0!important;width:100%!important;margin-inline:0!important;position:static!important;transform:none!important" title="${escapeHtml(characterName)}">${escapeHtml(characterName)}</div></div><div class="messages" tabindex="0" role="region" aria-label="手机消息，可在屏幕内滚动">${messages.map(m => {
     const body = escapeHtml(m.text);
     let inner = body;
     if (m.type === 'voice') inner = `<details class="voice"><summary class="voice-bar"><span class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>${escapeHtml(m.duration || '语音')}</span><span class="voice-hint"><span class="voice-closed">转文字</span><span class="voice-open">收起</span></span></summary><div class="voice-transcript">${body || '暂无转写文字'}</div></details>`;
@@ -52,7 +58,7 @@ export function renderReader(story, theme, chapterIndex = null, themeForChapter 
       try {
         const messages = resolveMessageStickers(parsePhone(chapter.content, { character: story.snapshot?.character?.name, persona: story.snapshot?.persona?.name }), chapter.stickerSnapshot);
         if (!messages.length) throw new Error('没有可显示的有效消息，原文已保留，可打开编辑修正。');
-        content = phoneHtml(messages, story.snapshot?.character?.name || '角色');
+        content = phoneHtml(messages, story.snapshot?.character?.name || '角色', chapter.phoneAppearance, n);
       }
       catch (error) { content = `<p class="diagnostic">${escapeHtml(error.message)}</p>`; }
     } else {

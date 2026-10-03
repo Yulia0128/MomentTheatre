@@ -1,10 +1,12 @@
 import {id} from './model.js';
 import {validateShared} from './library-sync.js';
 import {canonical,sha256} from './sync-integrity.js';
+import {packBundle,unpackBundle,validateBundle,validatePart,partName} from './data-bundle.js';
 
 export const SYNC_INDEX='momenttheatre-sync-v1.json';
 export const SYNC_LIMIT=50000000;
 const snapshotName=/^momenttheatre-sync-[a-zA-Z0-9_-]{16,100}\.json$/;
+const blockName=/^momenttheatre-part-[a-f0-9]{64}\.json$/;
 const fail=message=>{throw new Error(message);};
 const encode=text=>{const bytes=new TextEncoder().encode(text);let binary='';for(let i=0;i<bytes.length;i+=16384)binary+=String.fromCharCode(...bytes.subarray(i,i+16384));return btoa(binary);};
 export function packSnapshot(state){
@@ -40,7 +42,7 @@ export class ServerLibrary {
     try{return JSON.parse(raw);}catch{fail('服务器未返回有效同步文件，已停止操作。');}
   }
   async read(name,allowMissing=false){
-    if(name!==SYNC_INDEX&&!snapshotName.test(name))fail('同步文件路径不正确。');
+    if(name!==SYNC_INDEX&&!snapshotName.test(name)&&!blockName.test(name))fail('同步文件路径不正确。');
     const response=await this.request('/user/files/'+name);
     if(response.status===404&&allowMissing){
       const path='user/files/'+name,verify=await this.request('/api/files/verify',{urls:[path]});
@@ -50,7 +52,7 @@ export class ServerLibrary {
       fail('服务器文件读取异常，未覆盖同步索引。');
     }
     if(!response.ok)fail('读取服务器资料失败：HTTP '+response.status);
-    return this.readJSON(response,name===SYNC_INDEX?10000:SYNC_LIMIT);
+    return this.readJSON(response,name===SYNC_INDEX?10000:blockName.test(name)?4000000:SYNC_LIMIT);
   }
   async write(name,value){
     const response=await this.request('/api/files/upload',{name,data:encode(JSON.stringify(value))});
@@ -61,13 +63,31 @@ export class ServerLibrary {
   async index(){const result=await this.read(SYNC_INDEX,true);return result===null?null:validateIndex(result);}
   async pull(){
     const index=await this.index();if(!index)return {index:null,current:null,state:null};
-    return {index,current:index.current,state:unpackSnapshot(await this.read(index.current))};
+    const snapshot=await this.read(index.current);
+    const state=snapshot?.version===2 ? validateShared(await unpackBundle(snapshot,'sync',hash=>this.read(partName(hash)))) : unpackSnapshot(snapshot);
+    return {index,current:index.current,state};
   }
   async push(record,state,stillCurrent=()=>true){
-    const name='momenttheatre-sync-'+id()+'.json',snapshot=packSnapshot(state);
+    validateShared(state);
+    const name='momenttheatre-sync-'+id()+'.json',{manifest:snapshot,blocks}=packBundle(state,'sync');
     if(!stillCurrent())fail('本机资料已变化，上传停止。');
+    const hashes=[...blocks.keys()],existing=new Set();
+    for(let i=0;i<hashes.length;i+=100){
+      if(!stillCurrent(false))fail('本机资料已变化，上传停止；旧索引未覆盖。');
+      const urls=hashes.slice(i,i+100).map(hash=>'user/files/'+partName(hash));
+      const response=await this.request('/api/files/verify',{urls});
+      if(!response.ok)fail('无法核对已有同步分块，旧索引未覆盖。');
+      const result=await this.readJSON(response,50000);
+      for(const path of urls){if(typeof result?.[path]!=='boolean')fail('服务器分块状态异常，旧索引未覆盖。');if(result[path])existing.add(path.split('/').at(-1));}
+    }
+    for(const [hash,part] of blocks){
+      if(!stillCurrent(false))fail('本机资料已变化，上传停止；旧索引未覆盖。');
+      const filename=partName(hash);
+      if(!existing.has(filename))await this.write(filename,part);
+      validatePart(await this.read(filename),hash);
+    }
     await this.write(name,snapshot);
-    const readback=await this.read(name);unpackSnapshot(readback);
+    const readback=await this.read(name);validateBundle(readback,'sync');
     if(readback.checksum!==snapshot.checksum)fail('上传校验不一致，服务器旧索引未覆盖。');
     if(!stillCurrent())fail('本机资料已变化，独立快照已保留，旧索引未覆盖。');
     if(canonical(await this.index())!==canonical(record.index))fail('另一设备刚刚上传了资料，请重新同步；本次快照已保留。');
