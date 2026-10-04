@@ -101,3 +101,6 @@ button:hover{background:transparent}.primary:hover{background:var(--ink);opacity
 .reading-fullscreen .html-diagnostic{height:100%;overflow:auto;margin:0;padding:16px}
 .shell.reading-fullscreen[data-reading-mode="html"],.reading-fullscreen[data-reading-mode="html"] .reading-surface{background:transparent}
 .reading-fullscreen[data-reading-mode="html"] .reading-surface{padding-top:var(--safe-top)}
+
+/* Startup stays readable before the library is available. */
+.startup-message{white-space:pre-wrap;overflow-wrap:anywhere}.startup-page{max-width:680px}

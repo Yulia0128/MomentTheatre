@@ -85,21 +85,11 @@ function windowIcon(kind) {
 export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const previous = document.getElementById('shunxi-extension-root');
   if (previous) return;
-  const store = new LibraryStore(host.scope);
-  let state = await store.open();
-  const retained = limitDraftStories(state);
-  if (retained !== state) { await store.save(retained); state = retained; }
-  if (migrateStickerCatalogue(state.settings)) await store.save(state);
-  state.themes = state.themes.map(validateTheme);
+  let store = null, state = null, ready = false, loading = null, startupError = null;
   let catalog = { characters: [], personas: [], books: [], presets: [] };
-  let tab = 'generate', storyId = state.stories[0]?.id || null, chapterIndex = 0, continuationOpen = false;
+  let tab = 'generate', storyId = null, chapterIndex = 0, continuationOpen = false;
   let category = 'all', tag = '', query = '', skinPreview = 'prose', task = null, editing = false, editText = '';
   let scriptTag = '', scriptQuery = '';
-  if (state.editorDraft) {
-    const saved = state.stories.find(story => story.id === state.editorDraft.storyId);
-    const index = saved?.chapters.findIndex(ch => ch.id === state.editorDraft.chapterId) ?? -1;
-    if (index >= 0) { storyId = saved.id; chapterIndex = index; editing = true; editText = state.editorDraft.content; }
-  }
   const filterExpanded = { 分类: false, 标签: false }, filterLayouts = new Map();
   const filterObserver = new ResizeObserver(entries => {
     for (const entry of entries) filterLayouts.get(entry.target)?.(entry.contentRect.width);
@@ -118,23 +108,20 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (!readingWarnings.has(warning)) { readingWarnings.add(warning); report(new Error(warning), '正文正则'); }
   };
   const readerAssets = new ReaderAssets(), panes = new Map();
-  const root = el('div', { id: 'shunxi-extension-root', 'data-theme': state.settings.theme });
+  const root = el('div', { id: 'shunxi-extension-root', 'data-theme': 'day' });
   const shadow = root.attachShadow({ mode: 'open' });
-  if (stylesheet === null) {
-    const cssResponse = await fetch(new URL('../style.css', import.meta.url));
-    if (!cssResponse.ok) throw new Error('瞬息样式文件加载失败，请检查扩展目录是否完整。');
-    stylesheet = await cssResponse.text();
-  }
+  // This small shell must work even when the main stylesheet or library cannot load.
+  const startupStyle = el('style', {}, ':host{font:14px/1.7 system-ui;color:#282724}.shell{box-sizing:border-box;position:fixed;inset:0;width:min(960px,96vw);height:min(820px,94dvh);margin:auto;padding:calc(18px + env(safe-area-inset-top,0px)) 20px calc(18px + env(safe-area-inset-bottom,0px));border:0;background:#faf9f6;color:#282724;overflow:auto}.shell::backdrop{background:#0005}.topbar,.window-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:8px}.mark,.window-icon{display:inline-block;width:24px}.workspace{padding-top:24px}.startup-message{white-space:pre-wrap;overflow-wrap:anywhere}.startup-page button{padding:8px 20px}button{cursor:pointer}.tabs:empty{display:none}');
+  shadow.append(startupStyle);
   window.addEventListener('message', onReaderMessage);
-  shadow.append(el('style', {}, stylesheet));
-  const launcher = button('', () => open(), { id: 'shunxi-floating-launcher', class: 'launcher shunxi-floating-ball', slot: 'launcher', 'data-theme': state.settings.theme, 'aria-label': '打开瞬息番外小剧场', title: '瞬息 · 拖动可移动，点击打开' });
+  const launcher = button('', () => open(), { id: 'shunxi-floating-launcher', class: 'launcher shunxi-floating-ball', slot: 'launcher', 'data-theme': 'day', 'aria-label': '打开瞬息番外小剧场', title: '瞬息 · 拖动可移动，点击打开' });
   launcher.append(mobius(), el('span', { class: 'unread', hidden: true }));
   const dialog = el('dialog', { class: 'shell', 'aria-label': '瞬息番外小剧场' });
   const content = el('div', { class: 'workspace' });
   const fullscreen = readerFullscreen(dialog, content);
   const status = el('div', { class: 'status', role: 'status', 'aria-live': 'polite' });
   const nav = el('nav', { class: 'tabs', 'aria-label': '页面' });
-  const themeButton = button(windowIcon(state.settings.theme), toggleTheme, { class: 'icon-button', 'aria-label': '切换日夜模式' });
+  const themeButton = button(windowIcon('day'), toggleTheme, { disabled: true, class: 'icon-button', 'aria-label': '切换日夜模式' });
   const header = el('header', { class: 'topbar' }, el('div', { class: 'brand' }, mobius(), el('span', {}, '瞬息')), nav,
     el('div', { class: 'window-actions' }, themeButton, button(windowIcon('minimize'), () => dialog.close(), { class: 'icon-button', 'aria-label': '收起瞬息，生成继续' })));
   dialog.append(header);
@@ -200,6 +187,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (!error) noticeTimer = setTimeout(() => { if (!task) status.textContent = ''; }, 8000);
   }
   function report(error, stage = task?.stage || '操作') {
+    if (!ready) { startupError = error; renderStartup(); return; }
     const entry = errorRecord(error, stage, host.getKey());
     state.errors.unshift(entry); state.errors = state.errors.slice(0, 50);
     if (task) generationError = entry;
@@ -208,6 +196,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     const list = shadow.querySelector('.error-list'); if (list) list.replaceChildren(...errorRows());
   }
   async function persist() {
+    if (!ready) return;
     clearTimeout(saveTimer); store.checkpoint(state);
     const retained = limitDraftStories(state);
     const keep = new Set(retained.stories.map(story => story.id));
@@ -219,16 +208,18 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     }
   }
   function scheduleSave() {
+    if (!ready || disposed) return;
     try { store.checkpoint(state); } catch (error) { report(error, '保存'); }
     clearTimeout(saveTimer); saveTimer = setTimeout(() => persist().catch(report), 250);
   }
-  function setLauncherEnabled(value) { state.settings.launcherEnabled = value; launcher.hidden = !value; nativePanel?.sync(value); scheduleSave(); }
+  function setLauncherEnabled(value) { if (!ready) { nativePanel?.sync(!launcher.hidden, true); return; } state.settings.launcherEnabled = value; launcher.hidden = !value; nativePanel?.sync(value); scheduleSave(); }
   async function action(fn) { if (busyAction) return; busyAction = true; try { await fn(); } catch (e) { report(e); } finally { busyAction = false; } }
-  function open() { unread = false; launcher.querySelector('.unread').hidden = true; launcher.classList.remove('complete'); if (!dialog.open) dialog.showModal(); refreshCatalog(false); }
-  function toggleTheme() { state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night'; root.dataset.theme = launcher.dataset.theme = state.settings.theme; themeButton.replaceChildren(windowIcon(state.settings.theme)); scheduleSave(); }
+  function open() { unread = false; launcher.querySelector('.unread').hidden = true; launcher.classList.remove('complete'); if (!dialog.open) dialog.showModal(); if (ready) refreshCatalog(false); }
+  function toggleTheme() { if (!ready) return; state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night'; root.dataset.theme = launcher.dataset.theme = state.settings.theme; themeButton.replaceChildren(windowIcon(state.settings.theme)); scheduleSave(); }
   function changeTab(value) { if (editing) { notify('请先保存或取消章节编辑。'); return; } tab = value; render(true); content.scrollTop = 0; }
   function renderNav() { nav.replaceChildren(...[['generate', '番外'], ['scripts', '剧本'], ['library', '故事'], ['themes', '美化'], ['settings', '设置']].map(([value, title]) => button(title, () => changeTab(value), { 'aria-current': value === tab ? 'page' : null, class: value === tab ? 'active' : '' }))); }
   function render(switching = false) {
+    if (!ready) { renderStartup(); return; }
     fullscreen.exit(false);
     filterObserver.disconnect(); filterLayouts.clear();
     for (const menu of [...openDropdowns]) setDropdownOpen(menu, false);
@@ -360,7 +351,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     return page;
   }
   async function run(continuing, toppingUp = false) {
-    if (task || editing) return;
+    if (!ready || disposed || task || editing) return;
     const settings = clone(state.settings), previousStory = continuing || toppingUp ? current() : null;
     const unfinished = toppingUp ? previousStory?.chapters.at(-1) : null;
     if (toppingUp && !unfinished) return;
@@ -800,6 +791,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     state.settings[mode === 'phone' ? 'phoneTheme' : 'proseTheme'] = themeId;
   }
   async function refreshCatalog(showNotice = true) {
+    if (!ready || disposed) return;
     const request = ++catalogRequest;
     try {
       const next = await host.catalog();
@@ -1100,7 +1092,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('按分类导出 ZIP', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('small', { class: 'muted' }, '未收藏番外最多保留 10 篇，超出后清理最早创建的；故事收藏和剧本不受影响。'),
         ),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.1.4：头像更清晰，小手机普通消息格式优化，支持阅读区域全屏。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.1.6：入口提前显示，资料加载失败时可查看原因并重试。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -1112,13 +1104,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   }
   function placeLauncher() {
     if (launcher.parentElement !== root) return; // The collector owns docked positioning.
-    const position = state.settings.launcher, size = 32;
+    const position = state?.settings.launcher || {}, size = 32;
     const x = Math.max(8, Math.min(innerWidth - size - 8, position.x ?? innerWidth - size - 18));
     const y = Math.max(8, Math.min(innerHeight - size - 8, position.y ?? innerHeight * 0.65));
     launcher.style.left = `${x}px`; launcher.style.top = `${y}px`;
   }
   let drag = null, wasDragged = false;
-  launcher.addEventListener('pointerdown', e => { if (e.button !== 0 || launcher.parentElement !== root) return; drag = { x: e.clientX, y: e.clientY, left: parseFloat(launcher.style.left), top: parseFloat(launcher.style.top) }; wasDragged = false; launcher.setPointerCapture(e.pointerId); });
+  launcher.addEventListener('pointerdown', e => { if (!ready || e.button !== 0 || launcher.parentElement !== root) return; drag = { x: e.clientX, y: e.clientY, left: parseFloat(launcher.style.left), top: parseFloat(launcher.style.top) }; wasDragged = false; launcher.setPointerCapture(e.pointerId); });
   launcher.addEventListener('pointermove', e => { if (!drag || launcher.parentElement !== root) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) < 6 && !wasDragged) return; wasDragged = true; state.settings.launcher = { x: drag.left + dx, y: drag.top + dy }; placeLauncher(); });
   launcher.addEventListener('pointerup', () => { if (wasDragged) scheduleSave(); drag = null; });
   launcher.addEventListener('pointercancel', () => { drag = null; });
@@ -1128,12 +1120,12 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (launcher.parentElement === root) placeLauncher();
   });
   launcherObserver.observe(root, { childList: true });
-  const flushInputs = () => { try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
+  const flushInputs = () => { if (!ready || disposed) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
   const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { flushInputs(); persist().catch(report); } };
   const beforeUnload = e => { flushInputs(); if (task || editing) { e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('resize', placeLauncher); window.addEventListener('beforeunload', beforeUnload);
-  launcher.hidden = state.settings.launcherEnabled === false;
-  try { nativePanel = host.mountSettingsPanel?.({ enabled: !launcher.hidden, setEnabled: setLauncherEnabled }); } catch (error) { report(error); }
+  launcher.hidden = false;
+  try { nativePanel = host.mountSettingsPanel?.({ enabled: !launcher.hidden, setEnabled: setLauncherEnabled, disabled: true }); } catch (error) { report(error); }
   try { wandEntry = host.mountWandEntry?.({ open }); } catch (error) { report(error); }
   window.addEventListener('pagehide', flushInputs); document.addEventListener('visibilitychange', onVisibilityChange);
   const refreshSyncStatus = value => {
@@ -1142,6 +1134,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     // the last committed library or its pending-input journal recoverable.
     const busy=value.kind==='syncing';content.inert=busy;nav.inert=busy;themeButton.disabled=busy;
   };
+  function initializeSync() {
   if(host.libraryRemote) {
     sync=new LibrarySync({store,remote:host.libraryRemote(),getState:()=>state,prepare:persist,
       canApply:()=>!disposed&&!task&&!editing&&!busyAction&&!shadow.querySelector('.popup[open]'),
@@ -1158,9 +1151,65 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       }
     });
   }
-  placeLauncher(); render();
-  host.onCharacterChange?.(() => { refreshCatalog(false); });
-  await refreshCatalog(false);
+  }
+  function renderStartup() {
+    if (disposed) return;
+    nav.replaceChildren(); themeButton.disabled = true;
+    const message = startupError ? errorRecord(startupError, '启动', host.getKey()).message : '正在读取资料…';
+    content.replaceChildren(el('section', { class: 'page startup-page', 'aria-busy': !startupError },
+      el('h1', {}, startupError ? '资料暂时无法打开' : '正在读取资料…'),
+      startupError ? el('p', { class: 'startup-message', role: 'alert' }, message) : null,
+      startupError ? el('p', { class: 'muted' }, '原资料不会被空白资料替换。请根据上面的原因处理后重试。') : null,
+      startupError ? button('重试', () => initialize(), { class: 'outline' }) : null));
+  }
+  function initialize() {
+    if (loading || ready || disposed) return loading;
+    startupError = null; renderStartup();
+    // Defer work until loading holds the promise, so repeated clicks share one attempt.
+    loading = Promise.resolve().then(async () => {
+      try {
+        if (disposed) return;
+        if (stylesheet === null) {
+          const response = await fetch(new URL('../style.css', import.meta.url));
+          if (!response.ok) throw new Error('瞬息样式文件加载失败，请检查扩展目录是否完整。');
+          stylesheet = await response.text();
+        }
+        if (disposed) return;
+        startupStyle.textContent = stylesheet;
+        store = new LibraryStore(host.scope);
+        let loaded = await store.open();
+        if (disposed) return;
+        loaded.themes = loaded.themes.map(validateTheme);
+        const retained = limitDraftStories(loaded);
+        if (retained !== loaded) { await store.save(retained); loaded = retained; }
+        if (migrateStickerCatalogue(loaded.settings)) await store.save(loaded);
+        if (disposed) return;
+        state = loaded; storyId = state.stories[0]?.id || null;
+        if (state.editorDraft) {
+          const saved = state.stories.find(story => story.id === state.editorDraft.storyId);
+          const index = saved?.chapters.findIndex(ch => ch.id === state.editorDraft.chapterId) ?? -1;
+          if (index >= 0) { storyId = saved.id; chapterIndex = index; editing = true; editText = state.editorDraft.content; }
+        }
+        ready = true;
+        root.dataset.theme = launcher.dataset.theme = state.settings.theme;
+        launcher.hidden = state.settings.launcherEnabled === false;
+        nativePanel?.sync(!launcher.hidden);
+        themeButton.disabled = false; themeButton.replaceChildren(windowIcon(state.settings.theme));
+        placeLauncher(); content.replaceChildren(); panes.clear(); render(); initializeSync();
+      } catch (error) {
+        ready = false; state = null; editing = false; editText = ''; storyId = null; chapterIndex = 0; panes.clear();
+        nativePanel?.sync(!launcher.hidden, true);
+        sync?.dispose(); sync = null;
+        await store?.close().catch(() => {}); store = null;
+        if (!disposed) { startupError = error; renderStartup(); }
+      } finally { loading = null; }
+      if (ready && !disposed) await refreshCatalog(false);
+    });
+    return loading;
+  }
+  placeLauncher(); renderStartup();
+  host.onCharacterChange?.(() => { if (ready) refreshCatalog(false); });
   if (preview) open();
-  return { open, async dispose() { disposed = true; finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
+  const initialLoad = initialize();
+  return { open, ready: initialLoad, retry: initialize, async dispose() { disposed = true; finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); if (ready) await store.save(state).catch(() => {}); await store?.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
 }

@@ -1,5 +1,5 @@
 // Native settings container verified against SillyTavern 1.18.0 public/index.html.
-export function mountExtensionPanel({ enabled, setEnabled }, container = document.getElementById('extensions_settings')) {
+export function mountExtensionPanel({ enabled, setEnabled, disabled = false }, container = document.getElementById('extensions_settings')) {
   if (!container) throw new Error('未找到酒馆扩展设置区域，请刷新页面后重试。');
   const panel = document.createElement('div');
   panel.id = 'shunxi-native-settings';
@@ -14,10 +14,10 @@ export function mountExtensionPanel({ enabled, setEnabled }, container = documen
   const row = document.createElement('label');
   row.className = 'checkbox_label';
   const checkbox = document.createElement('input');
-  checkbox.type = 'checkbox'; checkbox.checked = enabled;
+  checkbox.type = 'checkbox'; checkbox.checked = enabled; checkbox.disabled = disabled;
   checkbox.addEventListener('change', () => setEnabled(checkbox.checked));
   row.append(checkbox, document.createTextNode('开启悬浮窗入口'));
   // SillyTavern owns the delegated click handler, animation, icon font and theme styles.
   content.append(row); drawer.append(heading, content); panel.append(drawer); container.append(panel);
-  return { sync(value) { checkbox.checked = value; }, dispose() { panel.remove(); } };
+  return { sync(value, disabled = false) { checkbox.checked = value; checkbox.disabled = disabled; }, dispose() { panel.remove(); } };
 }

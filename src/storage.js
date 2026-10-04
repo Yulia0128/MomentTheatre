@@ -28,13 +28,17 @@ export class LibraryStore {
     if (!this.factory) throw new Error('浏览器不支持 IndexedDB，无法安全保存番外。请使用正常浏览模式。');
     this.db = await new Promise((resolve, reject) => {
       const request = this.factory.open('shunxi-library', 2);
+      let abandoned = false;
+      const fail = error => { abandoned = true; reject(error); };
+      this.cancelOpen = () => fail(new Error('资料库读取已取消。'));
       request.onupgradeneeded = () => {
+        if (abandoned) { request.transaction.abort(); return; }
         if (!request.result.objectStoreNames.contains('accounts')) request.result.createObjectStore('accounts');
         if (!request.result.objectStoreNames.contains('avatars')) request.result.createObjectStore('avatars');
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(new Error('番外资料库打开失败，请检查浏览器存储权限。'));
-      request.onblocked = () => reject(new Error('资料库正在其他页面升级，请关闭旧页面后重试。'));
+      request.onsuccess = () => { if (abandoned) request.result.close(); else { this.cancelOpen = null; resolve(request.result); } };
+      request.onerror = () => fail(new Error('番外资料库打开失败，请检查浏览器存储权限。'));
+      request.onblocked = () => fail(new Error('资料库正在其他页面升级，请关闭旧页面后重试。'));
     });
     this.db.onversionchange = () => this.db.close();
     return this.load();
@@ -136,5 +140,5 @@ export class LibraryStore {
     });
     return (await this.decodeRow(row))?.state || null;
   }
-  async close() { await this.queue; this.db?.close(); }
+  async close() { this.cancelOpen?.(); this.cancelOpen = null; await this.queue; this.db?.close(); }
 }
