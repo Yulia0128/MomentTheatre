@@ -250,3 +250,11 @@ confidence：源码高；隔离浏览器使用附件原始识别／搬移／释�
 - 不采用“只删除 secret_id”：TT 会忽略值为空的额外请求头，可能让未填独立密钥的请求继承宿主 custom 密钥。使用请求内凭据分支避免该问题。
 - 非 TT 保留旧 `custom_url`、占位 `secret_id`、`custom_include_headers` 的值；跟随主 API 继续由宿主 `presetToGeneratePayload` 组装。
 - confidence：源码契约 high；runtime_check：`tests/tt-api.test.js` 覆盖原错误复现、模型列表、实际连接测试入口、流式／非流式生成、空密钥隔离、401／取消传播、原版精确参数回归及两种宿主的主 API 不变。测试使用模拟宿主，不能替代 TT 真机验收。
+
+## 1.1.5 小魔棒入口（2026-10-04）
+
+- symbol：`#extensionsMenu`、`extension_container`、`list-group-item flex-container flexGap5`、`extensionsMenuExtensionButton`。surface：SillyTavern core 原生菜单 DOM，非 Tavern Helper。applies_to：1.15.0、1.16.0、1.17.0、1.18.0 官方 tag。
+- provenance：各 tag 的 `public/scripts/templates/wandMenu.html`、`public/scripts/extensions.js` 中 `addExtensionsButtonAndMenu()`，以及 `public/scripts/extensions/caption/index.js` 中 `addSendPictureButton()`。逐版读取；[1.15.0 原生菜单实现](https://github.com/SillyTavern/SillyTavern/blob/1.15.0/public/scripts/extensions.js)、[1.18.0 原生菜单实现](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions.js)、[1.18.0 官方条目示例](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions/caption/index.js)。
+- 瞬息新增独立容器，沿用宿主条目样式，直接调用自身 open()；不依赖悬浮球节点、可见性或位置。点击继续冒泡，由宿主原有 html 点击监听关闭菜单；不改宿主菜单内部显示状态。Enter／Space 转为同一点击流程。找不到容器时记录错误，不假装注册成功。卸载移除自身条目与监听。
+- confidence：high（四版源码一致）。runtime_check：Node 模拟 DOM 生命周期与事件测试；本轮浏览器工具阻止 file:// 页面访问，未完成真实酒馆点击验收。预览的菜单壳属于模拟宿主。
+- 音效依赖浏览器原生 AudioContext（兼容 webkitAudioContext），不增加酒馆 API 或酒馆助手依赖。用户点击生成时 resume，完成且未停止才播放一次，解码结果在当前实例复用，卸载关闭。静音、声音权限或移动后台挂起仍可能阻止声音；不会使生成与保存失败。

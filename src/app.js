@@ -4,6 +4,7 @@ import { limitDraftStories } from './draft-retention.js';
 import { readerFullscreen, readingIcon } from './reader-fullscreen.js';
 import { USER_AVATAR, CHAR_AVATAR } from './avatar-data.js';
 import { installLauncherStyle } from './launcher.js';
+import { completionSound } from './completion-sound.js';
 import { filterScripts, newScriptDraft, saveScriptDraft, scriptModeLabel, scriptToPrompt, parseTags, parseScriptImport, prepareScriptImport } from './scripts.js';
 import { migrateStickerCatalogue } from './default-stickers.js';
 import { htmlFilterRules } from './html-filters.js';
@@ -105,7 +106,8 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   });
   let sync = null;
   let saveTimer, noticeTimer, unread = false, disposed = false, busyAction = false;
-  let generationError = null, nativePanel = null, refreshRegexOptions = () => {}, catalogRequest = 0;
+  let generationError = null, nativePanel = null, wandEntry = null, refreshRegexOptions = () => {}, catalogRequest = 0;
+  const finishedSound = completionSound();
   const readingWarnings = new Set(), readerTokens = new WeakMap();
   const onReaderMessage = event => {
     const data = event.data;
@@ -369,6 +371,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (continuing && (!previousStory?.chapters.length || previousStory.mode === 'html' || mode === 'html')) return;
     if (continuing && previousStory.chapters.at(-1).complete === false) return notify('请先编辑并标记最后一节完成，或删除未完成章节，再继续续写。', true);
     const controller = new AbortController();
+    finishedSound.prepare();
     let readingTheme = null;
     generationError = null;
     const appearance = mode === 'phone' ? phoneAppearance(unfinished ? unfinished.phoneAppearance : settings.phoneAppearance) : undefined;
@@ -423,6 +426,8 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         try { generation.story.title = await generateTitle({ host, settings, snapshot, prompt, content: result.content, signal: controller.signal }); await persist(); } catch (error) { if (controller.signal.aborted) throw error; report(error, '标题生成'); }
       }
       await ensureSummaries({ story: generation.story, host, settings, signal: controller.signal, onPhase, onSave: persist });
+      if (controller.signal.aborted || disposed) throw new DOMException('已停止', 'AbortError');
+      if (result.complete !== false) void finishedSound.play();
       unread = !dialog.open; launcher.querySelector('.unread').hidden = !unread;
       launcher.classList.add('complete'); setTimeout(() => launcher.classList.remove('complete'), 3000);
       if (mode === 'html') { clearTimeout(noticeTimer); status.textContent = ''; }
@@ -1129,6 +1134,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   window.addEventListener('resize', placeLauncher); window.addEventListener('beforeunload', beforeUnload);
   launcher.hidden = state.settings.launcherEnabled === false;
   try { nativePanel = host.mountSettingsPanel?.({ enabled: !launcher.hidden, setEnabled: setLauncherEnabled }); } catch (error) { report(error); }
+  try { wandEntry = host.mountWandEntry?.({ open }); } catch (error) { report(error); }
   window.addEventListener('pagehide', flushInputs); document.addEventListener('visibilitychange', onVisibilityChange);
   const refreshSyncStatus = value => {
     for(const node of shadow.querySelectorAll('[data-sync-status]'))node.textContent=value.text;
@@ -1156,5 +1162,5 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   host.onCharacterChange?.(() => { refreshCatalog(false); });
   await refreshCatalog(false);
   if (preview) open();
-  return { open, async dispose() { disposed = true; fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
+  return { open, async dispose() { disposed = true; finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); await store.save(state).catch(() => {}); await store.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
 }

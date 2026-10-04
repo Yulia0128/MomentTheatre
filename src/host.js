@@ -1,6 +1,7 @@
 import { ServerLibrary } from './sync-remote.js';
 import { clone, id } from './model.js';
 import { mountExtensionPanel } from './extension-panel.js';
+import { mountWandEntry } from './wand-entry.js';
 import { normalizeRegexRules } from './preset-regex.js';
 
 export function normalizeEndpoint(value) {
@@ -87,6 +88,7 @@ export class TavernHost {
   getKey() { try { const saved = localStorage.getItem(this.sessionKey); if (saved) return saved; const previous = sessionStorage.getItem(this.sessionKey) || ''; if (previous) this.setKey(previous); return previous; } catch { return ''; } }
   setKey(key) { try { if (key) localStorage.setItem(this.sessionKey, key); else localStorage.removeItem(this.sessionKey); sessionStorage.removeItem(this.sessionKey); } catch { throw new Error('无法保存密钥，请检查浏览器存储权限。'); } }
   mountSettingsPanel(controller) { return mountExtensionPanel(controller); }
+  mountWandEntry(controller) { return mountWandEntry(controller); }
   async listModels(endpoint, { signal } = {}) {
     const key = this.getKey();
     // Native backend requests /models on the supplied custom endpoint; no browser CORS proxy.
