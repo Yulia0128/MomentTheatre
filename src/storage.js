@@ -3,7 +3,7 @@ import { packAvatars, unpackAvatars, avatarReferences } from './avatar-assets.js
 
 export class LibraryStore {
   constructor(scope, indexedDBFactory = globalThis.indexedDB, journalStorage = null) {
-    this.scope = scope; this.factory = indexedDBFactory; this.revision = 0; this.queue = Promise.resolve();
+    this.knownAssets = new Set(); this.knownImages = new Map(); this.scope = scope; this.factory = indexedDBFactory; this.revision = 0; this.queue = Promise.resolve();
     this.writer = id(); this.sequence = 0; this.syncEpoch = 0; this.activeSync = null; this.journalKey = `shunxi:${scope}:pending-input`;
     try { this.journal = journalStorage || globalThis.localStorage; } catch { this.journal = null; }
   }
@@ -16,7 +16,7 @@ export class LibraryStore {
     // They are not keystroke drafts, so never duplicate them in this journal.
     const settings = { ...state.settings }; delete settings.phoneAppearance;
     const record = { writer: this.writer, sequence: this.sequence, revision: this.revision,
-      draft: state.draft, settings, retainPhoneAppearance: true, editorDraft: state.editorDraft, scriptDrafts: state.scriptDrafts,
+      draft: state.draft, settings: packAvatars(settings, { knownHashes: this.knownAssets, knownUrls: this.knownImages }).data, packedStickerImages: true, retainPhoneAppearance: true, editorDraft: state.editorDraft, scriptDrafts: state.scriptDrafts,
       continuations: state.stories.map(s => ({ id: s.id, continuationDraft: s.continuationDraft, continuationMode: s.continuationMode })) };
     try { this.journal.setItem(this.journalKey, JSON.stringify(record)); }
     catch { throw new Error('即时草稿保存失败，请先复制当前输入或导出备份，检查浏览器存储空间。'); }
@@ -55,7 +55,8 @@ export class LibraryStore {
     const pending = this.readCheckpoint();
     if (pending && (pending.revision === this.revision || (value?.writer === pending.writer && (value.sequence || 0) < pending.sequence))) {
       const appearance = pending.retainPhoneAppearance && Object.hasOwn(state.settings, 'phoneAppearance') ? { phoneAppearance: state.settings.phoneAppearance } : {};
-      state.settings = { ...pending.settings, ...appearance }; state.draft = pending.draft; state.editorDraft = pending.editorDraft || null;
+      const pendingSettings = pending.packedStickerImages ? (await this.decodeRow({ storageVersion: 2, settings: pending.settings })).settings : pending.settings;
+      state.settings = { ...pendingSettings, ...appearance }; state.draft = pending.draft; state.editorDraft = pending.editorDraft || null;
       if (Array.isArray(pending.scriptDrafts)) state.scriptDrafts = pending.scriptDrafts;
       for (const s of state.stories) {
         const entry = pending.continuations?.find(c => c.id === s.id);
@@ -78,10 +79,12 @@ export class LibraryStore {
       for (const hash of refs) { const req = store.get([this.scope, hash]); req.onsuccess = () => assets.set(hash, req.result); }
       tx.oncomplete = resolve; tx.onerror = tx.onabort = () => reject(new Error('读取头像失败，原资料未覆盖。'));
     });
-    return unpackAvatars(row, assets);
+    const decoded = unpackAvatars(row, assets);
+    for (const hash of refs) { this.knownAssets.add(hash); this.knownImages.set(assets.get(hash), hash); }
+    return decoded;
   }
   save(state, { syncMeta = this.syncMeta, recovery = false, expectedRevision = null, expectedSequence = null } = {}) {
-    const metadata = clone(syncMeta || null), packed = packAvatars({ state, syncMeta: metadata }), sequence = this.sequence, epoch = this.syncEpoch;
+    const metadata = clone(syncMeta || null), packed = packAvatars({ state, syncMeta: metadata }, { knownUrls: this.knownImages }), sequence = this.sequence, epoch = this.syncEpoch;
     const work = () => new Promise((resolve, reject) => {
       if (epoch !== this.syncEpoch) { reject(new Error('同步后资料已更新，已阻止旧的待保存内容覆盖合并结果。')); return; }
       const transaction = this.db.transaction(['accounts', 'avatars'], 'readwrite');
@@ -116,6 +119,8 @@ export class LibraryStore {
         };
       };
       transaction.oncomplete = () => {
+        this.knownAssets = avatarReferences(packed.data);
+        this.knownImages = new Map([...packed.assets].map(([hash, url]) => [url, hash]));
         this.revision++; this.syncMeta = metadata;
         if (expectedRevision !== null) this.syncEpoch++;
         if (this.activeSync === transaction) this.activeSync = null;

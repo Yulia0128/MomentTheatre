@@ -13,12 +13,14 @@ export function safeImage(value) {
 }
 function phoneHtml(messages, characterName, appearance, chapterNumber) {
   const look = phoneAppearance(appearance);
-  characterName = look.remark || characterName;
+  const group = messages[0]?.group || '';
+  characterName = group || look.remark || characterName;
   // Large data URLs can exceed the browser's custom-property value limit.
   // One scoped image declaration per side avoids that limit and duplication per message.
-  const avatars = [['.own', look.userAvatar], [':not(.own)', look.charAvatar]].filter(([, url]) => url).map(([side, url]) => `.phone .message${side} .message-avatar{background-image:url("${url.replace(/["\\<>]/g, c => '\\' + c.charCodeAt(0).toString(16) + ' ')}")!important}`).join('');
+  const avatars = [['.own', look.userAvatar], [':not(.own)', group ? '' : look.charAvatar]].filter(([, url]) => url).map(([side, url]) => `${group ? '.phone.phone-group' : '.phone:not(.phone-group)'} .message${side} .message-avatar{background-image:url("${url.replace(/["\\<>]/g, c => '\\' + c.charCodeAt(0).toString(16) + ' ')}")!important}`).join('');
   const clock = messages.find(m => m.time)?.time?.match(/\d{1,2}:\d{2}/)?.[0] || '09:41';
-  return `${avatars ? `<style>@scope ([data-chapter="${chapterNumber}"]) { ${avatars} }</style>` : ''}<div class="phone"><div class="phone-screen"><div class="phone-status"><span>${escapeHtml(clock)}</span><span class="phone-island" aria-hidden="true"></span><span class="phone-battery" aria-hidden="true"><i></i></span></div><div class="phone-header" style="display:grid!important;grid-template-columns:24px minmax(0,1fr) 24px!important;column-gap:8px!important;padding-inline:17px!important;direction:ltr!important"><span class="phone-back" aria-hidden="true" style="grid-column:1!important;grid-row:1!important;text-align:left!important">‹</span><div class="phone-contact" style="grid-column:2!important;grid-row:1!important;text-align:center!important;min-width:0!important;width:100%!important;margin-inline:0!important;position:static!important;transform:none!important" title="${escapeHtml(characterName)}">${escapeHtml(characterName)}</div></div><div class="messages" tabindex="0" role="region" aria-label="手机消息，可在屏幕内滚动">${messages.map(m => {
+  return `${avatars ? `<style>@scope ([data-chapter="${chapterNumber}"]) { ${avatars} }</style>` : ''}<div class="phone${group ? ' phone-group' : ''}"><div class="phone-screen"><div class="phone-status"><span>${escapeHtml(clock)}</span><span class="phone-island" aria-hidden="true"></span><span class="phone-battery" aria-hidden="true"><i></i></span></div><div class="phone-header" style="display:grid!important;grid-template-columns:24px minmax(0,1fr) 24px!important;column-gap:8px!important;padding-inline:17px!important;direction:ltr!important"><span class="phone-back" aria-hidden="true" style="grid-column:1!important;grid-row:1!important;text-align:left!important">‹</span><div class="phone-contact" style="grid-column:2!important;grid-row:1!important;text-align:center!important;min-width:0!important;width:100%!important;margin-inline:0!important;position:static!important;transform:none!important" title="${escapeHtml(characterName)}">${escapeHtml(characterName)}</div></div><div class="messages" tabindex="0" role="region" aria-label="手机消息，可在屏幕内滚动">${messages.map(m => {
+    const senderName = m.sender === 'user' ? '你' : m.sender === 'system' ? '系统' : m.speaker || '角色';
     const body = escapeHtml(m.text);
     let inner = body;
     if (m.type === 'voice') inner = `<details class="voice"><summary class="voice-bar"><span class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>${escapeHtml(m.duration || '语音')}</span><span class="voice-hint"><span class="voice-closed">转文字</span><span class="voice-open">收起</span></span></summary><div class="voice-transcript">${body || '暂无转写文字'}</div></details>`;
@@ -37,8 +39,11 @@ function phoneHtml(messages, characterName, appearance, chapterNumber) {
       inner = `<div class="share-card"><strong>${escapeHtml(m.title || '网页分享')}</strong><div class="share-description"><span>${escapeHtml(m.description || m.text)}</span>${thumb ? `<img src="${escapeHtml(thumb)}" alt="分享缩略图" loading="lazy" referrerpolicy="no-referrer">` : `<span class="share-thumbnail">${phoneIcon('share')}</span>`}</div><div class="share-source">${phoneIcon('share')}<span>${escapeHtml(m.source || '网页分享')}</span></div></div>`;
     }
     if (['call', 'video'].includes(m.type)) inner = `<span class="call-record">${phoneIcon(m.type)}<span>${escapeHtml(m.status && m.status !== '发起' ? m.status : '发起')}${m.type === 'call' ? '语音' : '视频'}通话${m.duration ? ' · ' + escapeHtml(m.duration) : ''}</span></span>`;
-    if (m.type === 'retract') inner = `<div class="retracted-message"><span class="retract-notice">${m.sender === 'user' ? '你' : '对方'}撤回了一条消息</span><span class="retract-original">${body}</span></div>`;
-    return `<div class="message ${m.sender === 'user' ? 'own' : ''}" data-type="${m.type}"><span class="message-avatar" role="img" aria-label="${m.sender === 'user' ? '我方头像' : '对方头像'}"></span><div class="message-content"><div class="bubble">${inner}</div>${m.time ? `<time class="message-time">${escapeHtml(m.time)}</time>` : ''}</div></div>`;
+    if (m.type === 'retract') inner = `<div class="retracted-message"><span class="retract-notice">${escapeHtml(group ? senderName : m.sender === 'user' ? '你' : '对方')}撤回了一条消息</span><span class="retract-original">${body}</span></div>`;
+    if (group && m.sender === 'system') return `<div class="group-event">${inner}${m.time ? `<time class="message-time">${escapeHtml(m.time)}</time>` : ''}</div>`;
+    const nameAvatar = group && m.sender !== 'user';
+    const hue = Array.from(senderName).reduce((hash, char) => (hash * 31 + char.codePointAt(0)) % 360, 0);
+    return `<div class="message ${m.sender === 'user' ? 'own' : ''}" data-type="${m.type}"><span class="message-avatar${nameAvatar ? ' name-avatar' : ''}" role="img" aria-label="${escapeHtml(nameAvatar ? senderName + '的头像' : m.sender === 'user' ? '我方头像' : '对方头像')}"${nameAvatar ? ` style="background-image:none!important;background-color:hsl(${hue} 35% 85%)!important;color:#292a27!important;display:flex!important;align-items:center;justify-content:center;font:500 15px/1 system-ui"` : ''}>${nameAvatar ? escapeHtml(Array.from(senderName)[0] || '友') : ''}</span><div class="message-content">${nameAvatar ? `<span class="message-sender">${escapeHtml(senderName)}</span>` : ''}<div class="bubble">${inner}</div>${m.time ? `<time class="message-time">${escapeHtml(m.time)}</time>` : ''}</div></div>`;
   }).join('')}</div><div class="phone-footer" aria-hidden="true"><span class="phone-input"></span>${phoneIcon('plus')}</div><div class="phone-home" aria-hidden="true"></div></div></div>`;
 }
 export function renderReader(story, theme, chapterIndex = null, themeForChapter = null, onWarnings = null) {
@@ -58,7 +63,12 @@ export function renderReader(story, theme, chapterIndex = null, themeForChapter 
       try {
         const messages = resolveMessageStickers(parsePhone(chapter.content, { character: story.snapshot?.character?.name, persona: story.snapshot?.persona?.name }), chapter.stickerSnapshot);
         if (!messages.length) throw new Error('没有可显示的有效消息，原文已保留，可打开编辑修正。');
-        content = phoneHtml(messages, story.snapshot?.character?.name || '角色', chapter.phoneAppearance, n);
+        const conversations = [];
+        for (const message of messages) {
+          if (!conversations.length || (conversations.at(-1)[0].group || '') !== (message.group || '')) conversations.push([]);
+          conversations.at(-1).push(message);
+        }
+        content = conversations.map(rows => phoneHtml(rows, story.snapshot?.character?.name || '角色', chapter.phoneAppearance, n)).join('');
       }
       catch (error) { content = `<p class="diagnostic">${escapeHtml(error.message)}</p>`; }
     } else {

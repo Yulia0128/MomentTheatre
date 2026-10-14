@@ -104,3 +104,6 @@ button:hover{background:transparent}.primary:hover{background:var(--ink);opacity
 
 /* Startup stays readable before the library is available. */
 .startup-message{white-space:pre-wrap;overflow-wrap:anywhere}.startup-page{max-width:680px}
+
+.sticker-batch-picks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.sticker-batch-picks button{padding:8px;min-height:56px}.sticker-batch-picks button[aria-pressed=true]{border-color:var(--ink);background:var(--wash)}.sticker-batch-picks .sticker-thumbnail{width:48px;height:48px;max-width:100%;margin:auto}.sticker-batch-body{min-width:0}
+.sticker-image-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.sticker-image-heading>.text-button{flex-shrink:0;padding-top:0;padding-bottom:0}

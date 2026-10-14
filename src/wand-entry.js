@@ -11,7 +11,7 @@ export function mountWandEntry({ open }, container = document.getElementById('ex
   entry.setAttribute('role', 'button'); entry.tabIndex = 0;
   const icon = document.createElement('span');
   icon.className = 'fa-solid fa-infinity extensionsMenuExtensionButton'; icon.setAttribute('aria-hidden', 'true');
-  const text = document.createElement('span'); text.textContent = '瞬息 · 番外小剧场';
+  const text = document.createElement('span'); text.textContent = '瞬息';
   entry.append(icon, text); wrapper.append(entry); container.append(wrapper);
   // Let clicks bubble: the native menu owns its visibility and closes itself.
   const activate = () => open();

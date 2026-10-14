@@ -2,7 +2,7 @@ import {emptyState,normalizeState,clone,id} from './model.js';
 import {canonical,sha256} from './sync-integrity.js';
 import {limitDraftStories} from './draft-retention.js';
 
-export const LOCAL_SETTINGS = ['launcher','launcherEnabled','character','persona','books','bookCharacter','stickerDraft'];
+export const LOCAL_SETTINGS = ['launcher','launcherEnabled','character','persona','books','bookCharacter','stickerDraft','stickerBatchDraft'];
 export const equalSync = (a,b) => canonical(a) === canonical(b);
 export function sharedState(state) {
   const clean = normalizeState(state);
@@ -12,7 +12,7 @@ export function sharedState(state) {
 }
 export function applyShared(local,shared) {
   const settings = {...shared.settings};
-  for (const key of LOCAL_SETTINGS) settings[key] = clone(local.settings[key]);
+  for (const key of LOCAL_SETTINGS) { if (Object.hasOwn(local.settings, key)) settings[key] = clone(local.settings[key]); else delete settings[key]; }
   return normalizeState({...shared,settings,errors:local.errors,editorDraft:local.editorDraft,scriptDrafts:local.scriptDrafts});
 }
 const plain = value => value && typeof value === 'object' && !Array.isArray(value);

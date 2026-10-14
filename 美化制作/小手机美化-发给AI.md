@@ -1,6 +1,6 @@
 # 瞬息 · 小手机美化制作提示词
 
-请为「瞬息 · 番外小剧场」制作一份可以直接导入的小手机阅读主题 JSON，适用于插件 1.1.1（主题格式兼容 0.8.0 起的版本）。请依照下面的真实格式和组件制作。
+请为「瞬息 · 番外小剧场」制作一份可以直接导入的小手机阅读主题 JSON，适用于插件 1.1.7（主题格式兼容 0.8.0 起的版本）。请依照下面的真实格式和组件制作。
 
 我的风格要求：【在这里填写想要的风格；可描述手机外壳、屏幕底色、双方气泡、头像形状、卡片和字体等。未指定的细节请自行搭配。】
 
@@ -28,7 +28,7 @@
     "bubble": "#FFFFFF",
     "ownBubble": "#DDE3D8"
   },
-  "css": ".phone { --avatar-size: 32px; --message-gap: 8px; background: #D5D6D1; border-color: #ACAEA6; box-shadow: inset 0 0 0 3px #ffffff80, 0 8px 22px #00000010; } .phone .message-avatar { border-radius: 50%; border: 1px solid #292a271a; } .phone .phone-header { font-family: inherit; border-bottom-color: #292a271f; } .phone .bubble { font-size: 14px; line-height: 1.7; } .phone .message[data-type=text] .bubble { border-radius: 12px 12px 12px 4px; } .phone .message.own[data-type=text] .bubble { border-radius: 12px 12px 4px 12px; } .phone .message-time { color: #6F736A; opacity: 1; } .phone .transfer-card { background: #B97842; color: #FFFFFF; } .phone .messages { scrollbar-color: #A5AA9D transparent; } .phone .messages::-webkit-scrollbar-thumb { background: #A5AA9D; border-radius: 8px; } .phone .call-record { flex-wrap: wrap; line-height: 1.65; } .phone .transfer-main strong { font-variant-numeric: tabular-nums; } .phone .retracted-message, .phone .retract-original, .phone .retract-notice { font: inherit; } .phone .retract-notice { opacity: 0.55; } .phone .bubble { white-space: pre-wrap; overflow-wrap: anywhere; } .phone .transfer-main strong { font-size: var(--amount-size, 16px) !important; white-space: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: none; }"
+  "css": ".phone { --avatar-size: 32px; --message-gap: 8px; background: #D5D6D1; border-color: #ACAEA6; box-shadow: inset 0 0 0 3px #ffffff80, 0 8px 22px #00000010; } .phone .message-avatar { border-radius: 50%; border: 1px solid #292a271a; } .phone .phone-header { font-family: inherit; border-bottom-color: #292a271f; } .phone .bubble { font-size: 14px; line-height: 1.7; } .phone .message[data-type=text] .bubble { border-radius: 12px 12px 12px 4px; } .phone .message.own[data-type=text] .bubble { border-radius: 12px 12px 4px 12px; } .phone .message-time { color: #6F736A; opacity: 1; } .phone .transfer-card { background: #B97842; color: #FFFFFF; } .phone .messages { scrollbar-color: #A5AA9D transparent; } .phone .messages::-webkit-scrollbar-thumb { background: #A5AA9D; border-radius: 8px; } .phone .call-record { flex-wrap: wrap; line-height: 1.65; } .phone .transfer-main strong { font-variant-numeric: tabular-nums; } .phone .retracted-message, .phone .retract-original, .phone .retract-notice { font: inherit; } .phone .retract-notice { opacity: 0.55; } .phone .bubble { white-space: pre-wrap; overflow-wrap: anywhere; } .phone .sticker-image { border-radius: 10px; object-fit: contain; } .phone .transfer-main strong { font-size: var(--amount-size, 16px) !important; white-space: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: none; } .phone .message-avatar { background-image: var(--char-avatar); } .phone .own .message-avatar { background-image: var(--user-avatar); } .phone-group .message-sender { display: block; font-size: 11px; opacity: .65; line-height: 1.5; margin-bottom: 4px; overflow-wrap: anywhere; } .phone-group .name-avatar { border-radius: 50%; } .phone-group .group-event { text-align: center; font-size: 12px; opacity: .65; margin: 14px 0; }"
 }
 ```
 
@@ -201,3 +201,12 @@ CSS 已被插件限制在当前章节内部。请直接写下面的选择器，�
 `.phone-contact` 的文本可能是用户备注；不要在 CSS、伪元素中写死角色名。备注只替换显示，不改变消息中的 char／user、人物资料或生成提示。
 
 1.1.2 起用户确认的头像通过章节内限定的背景图片规则覆盖默认头像，避免大图超过 CSS 变量长度上限。主题仍可沿用默认头像变量及形状、尺寸、边框样式；不要用 !important 背景图遮住用户选择。
+
+
+## 1.1.7 群聊与本地表情
+
+小手机同一框架支持私聊与群聊，主题不能硬编码人物名称、群名或消息。群聊容器多一个 `.phone-group`；`.phone-contact` 显示群名，私聊仍显示对方备注或角色名。`.message-sender` 是对方气泡上方的完整姓名，`.name-avatar` 是姓名首字头像，`.group-event` 是居中的系统事件。可以调整姓名字号、字头像形状和系统事件间距，不要隐藏姓名，也不要用伪元素盖住首字。
+
+群聊我方头像仍使用 `--user-avatar` 与本章用户设置。对方字头像由框架按名字提供稳定底色及首字，不使用个人备注或 `--char-avatar`；私聊对方头像逻辑保持原样。框架保证群聊字头像没有图片背景，主题无需请求随机外链。
+
+本地表情仍是 `img.sticker-image`，地址可为内嵌 PNG/JPG/GIF/WebP；与直链表情沿用相同 CSS，保留圆角和等比缩放，不把动画转成背景截图。图片快照由插件管理，主题 JSON 不携带聊天数据、图库或用户头像。

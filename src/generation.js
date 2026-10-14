@@ -1,4 +1,4 @@
-import { parsePhoneReport, serializePhone, resolveMessageStickers, phoneSourceBlock } from './phone-format.js';
+import { parsePhoneReport, serializePhone, resolveMessageStickers, phoneSourceBlock, captureStickerSnapshot } from './phone-format.js';
 import { extractTitle } from './story-title.js';
 import { cleanHtml, htmlIssue } from './html-work.js';
 import { parsePhone } from './reader.js';
@@ -7,7 +7,7 @@ import { buildMessages } from './prompt.js';
 export const countWords = text => Array.from(String(text).replace(/[^\p{L}\p{N}]/gu, '')).length;
 export function readableText(content, mode, names) {
   if (mode !== 'phone') return content;
-  return parsePhone(content, names).map(m => [m.type, m.text, m.title, m.description, m.address, m.source, m.sticker, m.amount, m.status].filter(Boolean).join(' ')).join('\n');
+  return parsePhone(content, names).map(m => [m.group ? `群聊：${m.group}，${m.sender === 'user' ? '我方' : m.speaker || '系统'}` : '', m.type, m.text, m.title, m.description, m.address, m.source, m.sticker, m.amount, m.status].filter(Boolean).join(' ')).join('\n');
 }
 export const contentLength = (content, mode, names) => !content?.trim() ? 0 : mode === 'html' ? content.length : mode === 'phone' ? parsePhone(content, names).length : countWords(content);
 const checkInput = messages => {
@@ -61,7 +61,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
   let sourceContent = '';
   const names = { character: snapshot?.character?.name, persona: snapshot?.persona?.name };
   let content = mode === 'phone' && initialContent ? serializePhone(parsePhoneReport(initialContent, names).messages) : initialContent, title = '', rounds = 0, failures = 0, stagnant = 0, lastPart = '';
-  const metrics = () => { const size = contentLength(content, mode); return { content, sourceContent, title, complete: true, ...(mode === 'phone' ? { messageCount: size, targetMessages: target } : { wordCount: size, targetWords: target }), actual: size, target, unit, rounds, short: false }; };
+  const metrics = () => { const size = contentLength(content, mode); return { content, sourceContent, title, complete: true, ...(mode === 'phone' ? { stickerSnapshot: captureStickerSnapshot(content, settings.stickers, names) } : {}), ...(mode === 'phone' ? { messageCount: size, targetMessages: target } : { wordCount: size, targetWords: target }), actual: size, target, unit, rounds, short: false }; };
   for (let attempt = 0; attempt < 50; attempt++) {
     signal?.throwIfAborted();
     const prior = content, size = prior ? contentLength(prior, mode) : 0;
@@ -70,7 +70,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
     if (prior) {
       rounds++;
       onPhase?.('已生成 ' + size + '/' + target + unit + '，正在自动补写（' + rounds + '）…');
-      messages.push({ role: 'assistant', content: prior }, { role: 'user', content: '本节目前 ' + size + unit + '，未达到 ' + target + unit + '。请自然补充至少 ' + (target - size + (mode === 'phone' ? 0 : 50)) + ' ' + unit + (mode === 'phone' ? '消息。仅输出新的小手机消息行，格式为 [char|23:48|内容] 或上述特殊消息格式，放在 <小手机>...</小手机> 内，不重复已有消息。' : '，延展情节或细节。只输出接在末尾的新正文，不重复上文，不输出标题、说明或结束语。') });
+      messages.push({ role: 'assistant', content: prior }, { role: 'user', content: '本节目前 ' + size + unit + '，未达到 ' + target + unit + '。请自然补充至少 ' + (target - size + (mode === 'phone' ? 0 : 50)) + ' ' + unit + (mode === 'phone' ? '消息。保持本节原有会话和发言者身份，先重申 [私聊] 或 [群聊|原群名]；群成员用 成员:原姓名。我方仍用 user。仅输出新增消息及标记，放在 <小手机>...</小手机> 内，不重复已有消息。' : '，延展情节或细节。只输出接在末尾的新正文，不重复上文，不输出标题、说明或结束语。') });
     } else onPhase?.(settings.stream === false ? '正在等待完整回复…' : '正在生成…');
     checkInput(messages);
     let streamed = '', rawPart;
@@ -90,7 +90,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
       if (mode === 'phone' && streamed.trim()) {
         sourceContent += (sourceContent ? '\n\n' : '') + phoneSourceBlock(streamed); onSource?.(sourceContent);
         const old = prior ? parsePhoneReport(prior, names).messages : [];
-        const next = resolveMessageStickers(parsePhoneReport(streamed, names).messages, settings.stickers);
+        const next = resolveMessageStickers(parsePhoneReport(streamed, { ...names, group: old.at(-1)?.group }).messages, settings.stickers, { embedLocal: false });
         content = serializePhone([...old, ...next]); onChunk?.(content || streamed);
       }
       signal?.throwIfAborted();
@@ -107,10 +107,10 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
     const body = acceptTitle(extractTitle(rawPart, mode), true).trim();
     if (mode === 'phone') {
       sourceContent += (sourceContent ? '\n\n' : '') + phoneSourceBlock(rawPart); onSource?.(sourceContent);
-      const parsed = parsePhoneReport(body, names);
+      const parsed = parsePhoneReport(body, { ...names, group: prior ? parsePhoneReport(prior, names).messages.at(-1)?.group : '' });
       if (parsed.warnings.length) onWarnings?.(parsed.warnings);
       if (!parsed.recognized) onWarnings?.(['本次回复未识别到消息，原始回复已保留，正在尝试补足。']);
-      const next = resolveMessageStickers(parsed.messages, settings.stickers);
+      const next = resolveMessageStickers(parsed.messages, settings.stickers, { embedLocal: false });
       const old = prior ? parsePhoneReport(prior, names).messages : [];
       let overlap = 0;
       for (let n = Math.min(old.length, next.length); n > 0; n--) {

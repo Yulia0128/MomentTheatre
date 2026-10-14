@@ -10,17 +10,21 @@ export function avatarHash(url) {
   }
   return hashes.get(url);
 }
-function visit(value, transform, appearance = false) {
-  if (Array.isArray(value)) return value.map(item => visit(item, transform));
+function visit(value, transform, context = '') {
+  if (Array.isArray(value)) return value.map(item => visit(item, transform, context));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
-    appearance && ['userAvatar', 'charAvatar'].includes(key) ? transform(item) : visit(item, transform, key === 'phoneAppearance')]));
+    context === 'phoneAppearance' && ['userAvatar', 'charAvatar'].includes(key) || context === 'sticker' && key === 'url'
+      ? transform(item)
+      : visit(item, transform, key === 'phoneAppearance' ? key : ['stickers', 'stickerSnapshot', 'stickerDraft', 'stickerBatchDraft'].includes(key) || context === 'sticker' ? 'sticker' : '')]));
 }
-export function packAvatars(value) {
+export function packAvatars(value, { knownHashes = null, knownUrls = null } = {}) {
   const assets = new Map(), seen = new Map();
   const data = visit(value, url => {
     if (typeof url !== 'string' || !url.startsWith('data:image/')) return url;
-    const hash = seen.get(url) || avatarHash(url); seen.set(url, hash); assets.set(hash, url); return { avatar: hash };
+    const hash = seen.get(url) || knownUrls?.get(url) || avatarHash(url); seen.set(url, hash);
+    if (knownHashes && !knownHashes.has(hash)) return url;
+    assets.set(hash, url); return { avatar: hash };
   });
   return { data, assets };
 }

@@ -1,3 +1,4 @@
+import { localStickerUrl } from './sticker-files.js';
 // Message data stays separate from HTML. No model/user input is evaluated as code.
 export const PHONE_TYPES = ['text', 'voice', 'transfer', 'image', 'sticker', 'location', 'share', 'call', 'video', 'retract'];
 const labels = { text: '文字', voice: '语音', transfer: '转账', image: '图片', sticker: '表情', location: '定位', share: '分享', call: '语音通话', video: '视频通话', retract: '撤回' };
@@ -10,10 +11,11 @@ const lookup = (map, key) => Object.hasOwn(map, key) ? map[key] : '';
 const typeOf = v => PHONE_TYPES.includes(v) ? v : Object.keys(labels).find(k => labels[k] === v) || lookup({ 普通文字: 'text', 表情包: 'sticker', recall: 'retract', withdrawn: 'retract' }, v);
 const senderOf = (v, names = {}) => lookup({ user: 'user', char: 'char', assistant: 'char', system: 'system', 我: 'user', 用户: 'user', 角色: 'char' }, v) || (v && v === names.persona ? 'user' : v && v === names.character ? 'char' : '');
 export function safeStickerUrl(value) {
+  if (localStickerUrl(value)) return value;
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : ''; } catch { return ''; }
 }
 export function normalizeStickers(rows) {
-  return (Array.isArray(rows) ? rows : []).slice(0, 500).map(row => ({ name: scalar(row?.name).slice(0, 120), url: scalar(row?.url).slice(0, 4000), description: scalar(row?.description).slice(0, 1000) }));
+  return (Array.isArray(rows) ? rows : []).slice(0, 500).map(row => ({ name: scalar(row?.name).slice(0, 120), url: localStickerUrl(row?.url) || scalar(row?.url).slice(0, 4000), description: scalar(row?.description).slice(0, 1000) }));
 }
 export function activeStickers(rows) {
   const seen = new Set();
@@ -30,11 +32,13 @@ const statusMap = { pending: '待收款', accepted: '已接受', received: '已�
 export const phoneStatus = value => lookup(statusMap, scalar(value).trim().toLowerCase()) || scalar(value).trim();
 function normalizeMessage(raw, names) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const type = typeOf(raw.type || 'text'), sender = senderOf(raw.sender, names);
+  const group = scalar(raw.group).trim().slice(0, 120);
+  const member = group && /^成员[:：](.+)$/u.exec(raw.sender || '');
+  const type = typeOf(raw.type || 'text'), sender = member ? 'char' : senderOf(raw.sender, names);
   if (!type || !sender) return null;
-  const item = { type, sender };
+  const item = { type, sender, ...(group ? { group, ...(sender === 'char' ? { speaker: scalar(member?.[1] || raw.speaker || names.character || '角色').trim().slice(0, 120) } : {}) } : {}) };
   for (const key of ['time', 'text', 'duration', 'amount', 'status', 'url', 'title', 'description', 'source', 'thumbnail', 'address', 'sticker']) {
-    const value = scalar(raw[key]); if (value) item[key] = value;
+    const value = key === 'url' && type === 'sticker' ? localStickerUrl(raw[key]) || scalar(raw[key]) : scalar(raw[key]); if (value) item[key] = value;
   }
   if (item.status) item.status = phoneStatus(item.status);
   if (type === 'transfer') {
@@ -66,7 +70,8 @@ function splitFields(line) {
 }
 function lineMessage(line, names) {
   const match = line.trim().match(/^[\[［]([\s\S]*)[\]］]$/); if (!match) return null;
-  const parts = splitFields(match[1]), sender = senderOf(parts[0]?.trim(), names);
+  const parts = splitFields(match[1]), tokenSender = parts[0]?.trim();
+  const sender = names.group && /^成员[:：].+/u.test(tokenSender) ? tokenSender : senderOf(tokenSender, names);
   if (!sender || parts.length < 3) return null;
   const token = parts[2]?.trim();
   // Four fields with a numeric third field are a transfer; three fields remain speech.
@@ -218,14 +223,28 @@ function messageRecords(text) {
   return records;
 }
 export function parsePhoneReport(content, names = {}) {
-  const reports = phoneBodies(content).map(text => parsePhoneBody(text, names));
+  let group = names.group || '';
+  const reports = phoneBodies(content).map(text => {
+    const report = parsePhoneBody(text, { ...names, group });
+    group = report.group;
+    return report;
+  });
   const messages = reports.flatMap(report => report.messages);
   if (messages.length > 2000) throw new Error('小手机每节最多 2000 条消息。');
   return { messages, warnings: [...new Set(reports.flatMap(report => report.warnings))], recognized: reports.some(report => report.recognized) };
 }
 function parsePhoneBody(text, names) {
   const lines = messageRecords(text);
-  const lineRows = lines.map(line => lineMessage(line, names)).filter(Boolean);
+  let group = names.group || '';
+  const lineRows = [];
+  const parsedLines = new Set();
+  for (const line of lines) {
+    const parts = splitFields(line.replace(/^[\[［]/, '').replace(/[\]］]$/, ''));
+    if (parts[0]?.trim() === '群聊' && parts.length === 2) { group = parts[1].trim().slice(0, 120) || '群聊'; parsedLines.add(line); continue; }
+    if (parts[0]?.trim() === '私聊' && parts.length === 1) { group = ''; parsedLines.add(line); continue; }
+    const row = lineMessage(line, { ...names, group });
+    if (row) { lineRows.push({ ...row, ...(group ? { group } : {}) }); parsedLines.add(line); }
+  }
   const source = lineRows.length ? { rows: lineRows, recovered: false } : jsonMessages(text);
   if (source.rows.length > 2000) throw new Error('小手机每节最多 2000 条消息。');
   const messages = []; let time = '', rejected = source.rejected || 0;
@@ -237,12 +256,12 @@ function parsePhoneBody(text, names) {
     messages.push(item);
   }
   if (lineRows.length) rejected += lines.filter(line => {
-    if(lineMessage(line,names))return false;
+    if(parsedLines.has(line))return false;
     const parts=splitFields(line.replace(/^\s*[\[［]/,'').replace(/[\]］]\s*$/,''));
     return parts.length>1 && (senderOf(parts[0]?.trim(),names) || /^\d{1,2}:\d{2}/.test(parts[1]?.trim()));
   }).length;
   const warnings = rejected ? [`本次有 ${rejected} 条小手机消息无法显示，原文已保留，可打开编辑查看。`] : [];
-  return { messages, warnings, recognized: source.rows.length > 0 || !source.recovered };
+  return { messages, warnings, group, recognized: source.rows.length > 0 || !source.recovered };
 }
 export function parsePhone(content, names) {
   const result = parsePhoneReport(content, names);
@@ -265,7 +284,20 @@ export function savePhoneEdit(chapter, content, library = [], names = {}) {
 }
 const encode = value => scalar(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/\r?\n/g, '\\n');
 export function serializePhone(messages) {
-  return messages.map(m => {
+  let previousGroup = '';
+  return messages.map(message => {
+    const m = { ...message };
+    // Local image bytes belong in the frozen sticker catalogue, never in model context.
+    if (m.type === 'sticker' && localStickerUrl(m.url)) delete m.url;
+    let prefix = '';
+    if ((m.group || '') !== previousGroup) {
+      prefix = m.group ? '[群聊|' + encode(m.group) + ']\n' : '[私聊]\n'; previousGroup = m.group || '';
+    }
+    if (m.group && m.sender === 'char') m.sender = '成员:' + (m.speaker || '角色');
+    return prefix + serializeMessage(m);
+  }).join('\n');
+}
+function serializeMessage(m) {
     if (m.type === 'transfer' && (!m.status || ['pending', '待收款'].includes(m.status))) return '[' + [m.sender, m.time || '', m.amount, m.text || ''].map(encode).join('|') + ']';
     if (['call', 'video'].includes(m.type)) {
       const action = Object.keys(callLabels).find(k => callLabels[k][0] === m.type && callLabels[k][1] === (m.status || (m.duration ? '已结束' : '发起')));
@@ -273,19 +305,35 @@ export function serializePhone(messages) {
     }
     const values = fields[m.type].map(key => m[key] || ''); while (values.length > 1 && !values.at(-1)) values.pop();
     return '[' + [m.sender, m.time || '', ...(m.type === 'text' ? [] : [labels[m.type]]), ...values].map(encode).join('|') + ']';
-  }).join('\n');
 }
-export function resolveMessageStickers(messages, library) {
+export function resolveMessageStickers(messages, library, { embedLocal = true } = {}) {
   const map = new Map(activeStickers(library).map(row => [row.name, row]));
   return messages.map(m => {
     const sticker = m.type === 'sticker' && map.get(m.sticker || m.text);
-    return sticker && !safeStickerUrl(m.url) ? { ...m, url: sticker.url, text: m.text || sticker.description || sticker.name } : m;
+    return sticker && (embedLocal || !localStickerUrl(sticker.url)) && !safeStickerUrl(m.url) ? { ...m, url: sticker.url, text: m.text || sticker.description || sticker.name } : m;
   });
 }
+export function captureStickerSnapshot(content, library, names = {}) {
+  let messages;
+  try { messages = parsePhoneReport(content, names).messages; }
+  catch { return []; } // A display parse failure must never prevent saving the raw reply.
+  const used = new Set(messages.filter(m => m.type === 'sticker').map(m => m.sticker || m.text));
+  return activeStickers(library).filter(item => used.has(item.name));
+}
 export function phonePrompt(library = []) {
-  return `【小手机消息】只在 <小手机> 和 </小手机> 之间输出消息，不写作品标题，不加代码围栏。每行一条，sender 是 char（角色）或 user（我方）；system 只用于双方通话结束等系统记录。
+  return `【小手机消息】只在 <小手机> 和 </小手机> 之间输出消息，不写作品标题，不加代码围栏。每行一条。先根据本次剧情判断会话：用户明确要求优先；已有群聊即使只有两人发言也保持群聊；未指定时，我方与一名对方直接交流用私聊，三名及以上人物在同一会话交流用群聊。被提及、引用的人不算参与者，不因为多人卡就自动群聊，不为凑人数增加人物。
+私聊首行写 [私聊]，sender 用 char（对方）或 user（我方）。群聊首行写 [群聊|符合剧情的群名]，我方仍用 user，其他每个人用 成员:完整姓名，姓名始终一致；system 只用于通话结束等系统记录。不要把群名写成作品标题。每次回复（含补写）都重申会话标记，同一节保持当前会话；续写根据用户最新要求和剧情选择会话。
+群聊示例（只示范格式，不照抄人物与台词）：
+<小手机>
+[群聊|放学一起走]
+[成员:林舟|17:20|在校门口等你们。]
+[成员:陈悦|17:21|我已经到了。]
+[user|17:21|马上来！]
+</小手机>
+群聊的语音、表情、转账、撤回等沿用下列格式，只替换发送人；转账备注写清对象，通话接受／拒绝由具体响应者发出。
 框架会把以下短格式自动显示成消息组件。你需要根据剧情实际输出发起、接受、拒绝、撤回等事件；这些不是用户点击按钮触发的操作。格式如下：
 <小手机>
+[私聊]
 [char|23:48|到家了吗？]
 [user|23:48|刚到，正准备给你发消息。]
 [char|23:49|语音|12″|只写实际说出口的话，禁止动作、神态、旁白、括号或星号动作]

@@ -1,3 +1,4 @@
+import { readStickerFiles, localStickerUrl } from './sticker-files.js';
 import { phoneAppearance, avatarUrl, avatarFile, checkAvatarImage } from './phone-appearance.js';
 import { libraryBackup, restoreLibraryBackup } from './library-backup.js';
 import { limitDraftStories } from './draft-retention.js';
@@ -15,7 +16,7 @@ import { syncCharacterBooks } from './character-sources.js';
 import { ReaderAssets } from './reader-assets.js';
 import { defaultRegexSelection, selectedRegexRules, transformProse } from './preset-regex.js';
 import { generateTitle } from './story-title.js';
-import { parsePhoneReport, serializePhone, safeStickerUrl, editablePhoneText, savePhoneEdit, phoneSourceBlock } from './phone-format.js';
+import { parsePhoneReport, serializePhone, safeStickerUrl, editablePhoneText, savePhoneEdit, phoneSourceBlock, captureStickerSnapshot } from './phone-format.js';
 import { PROSE_PREVIEW_TITLE, PROSE_PREVIEW_CONTENT } from './theme-preview.js';
 import { VERSION, modeLabel, clone, id, newStory, appendChapter, invalidateSummaries, removeCategory, filterStories, normalizeState } from './model.js';
 import { LibraryStore } from './storage.js';
@@ -95,7 +96,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     for (const entry of entries) filterLayouts.get(entry.target)?.(entry.contentRect.width);
   });
   let sync = null;
-  let saveTimer, noticeTimer, unread = false, disposed = false, busyAction = false;
+  let saveTimer, noticeTimer, imageCommit = null, unread = false, disposed = false, busyAction = false;
   let generationError = null, nativePanel = null, wandEntry = null, refreshRegexOptions = () => {}, catalogRequest = 0;
   const finishedSound = completionSound();
   const readingWarnings = new Set(), readerTokens = new WeakMap();
@@ -192,11 +193,12 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     state.errors.unshift(entry); state.errors = state.errors.slice(0, 50);
     if (task) generationError = entry;
     clearTimeout(noticeTimer); status.textContent = ''; status.dataset.error = 'false';
-    store.save(state).catch(() => {});
+    Promise.resolve(imageCommit).catch(() => {}).then(() => store.save(state)).catch(() => {});
     const list = shadow.querySelector('.error-list'); if (list) list.replaceChildren(...errorRows());
   }
   async function persist() {
     if (!ready) return;
+    if (imageCommit) await imageCommit;
     clearTimeout(saveTimer); store.checkpoint(state);
     const retained = limitDraftStories(state);
     const keep = new Set(retained.stories.map(story => story.id));
@@ -209,7 +211,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   }
   function scheduleSave() {
     if (!ready || disposed) return;
-    try { store.checkpoint(state); } catch (error) { report(error, '保存'); }
+    try { if (!imageCommit) store.checkpoint(state); } catch (error) { report(error, '保存'); }
     clearTimeout(saveTimer); saveTimer = setTimeout(() => persist().catch(report), 250);
   }
   function setLauncherEnabled(value) { if (!ready) { nativePanel?.sync(!launcher.hidden, true); return; } state.settings.launcherEnabled = value; launcher.hidden = !value; nativePanel?.sync(value); scheduleSave(); }
@@ -355,7 +357,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     const settings = clone(state.settings), previousStory = continuing || toppingUp ? current() : null;
     const unfinished = toppingUp ? previousStory?.chapters.at(-1) : null;
     if (toppingUp && !unfinished) return;
-    if (unfinished) { settings.words = unfinished.targetWords || settings.words; settings.targetMessages = unfinished.targetMessages || settings.targetMessages; }
+    if (unfinished) { settings.stickers = [...new Map([...settings.stickers, ...(unfinished.stickerSnapshot || [])].map(item => [item.name, item])).values()]; settings.words = unfinished.targetWords || settings.words; settings.targetMessages = unfinished.targetMessages || settings.targetMessages; }
     const mode = unfinished ? unfinished.mode || previousStory.mode : continuing ? previousStory?.continuationMode || previousStory?.mode : state.draft.mode;
     const prompt = previousStory ? previousStory.prompt : state.draft.prompt;
     if (!prompt.trim()) return notify('请先填写番外内容。', true);
@@ -425,7 +427,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       else notify(`本节已生成 · ${result.actual}${result.unit}${result.rounds ? ` · 自动补写 ${result.rounds} 轮` : ''}`);
     } catch (error) {
       if (!generation.appended && generation.story && (generation.partial.trim() || generation.sourceContent?.trim())) {
-        try { if (unfinished) { unfinished.content = generation.partial || generation.sourceContent; unfinished.sourceContent = generation.sourceContent || unfinished.sourceContent; unfinished.complete = false; generation.story.updatedAt = Date.now(); } else appendChapter(generation.story, { content: generation.partial || generation.sourceContent, sourceContent: generation.sourceContent, readingRegex: generation.readingRegex, instruction: generation.instruction, complete: false, mode, phoneAppearance: appearance, targetWords: mode === 'prose' ? settings.words : 0, targetMessages: mode === 'phone' ? settings.targetMessages : 0, themeId: readingTheme?.id || '', readingTheme }); chapterIndex = generation.story.chapters.length - 1; await persist(); }
+        try { if (unfinished) { unfinished.content = generation.partial || generation.sourceContent; unfinished.sourceContent = generation.sourceContent || unfinished.sourceContent; if (mode === 'phone') unfinished.stickerSnapshot = captureStickerSnapshot(unfinished.content, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }); unfinished.complete = false; generation.story.updatedAt = Date.now(); } else appendChapter(generation.story, { content: generation.partial || generation.sourceContent, sourceContent: generation.sourceContent, stickerSnapshot: mode === 'phone' ? captureStickerSnapshot(generation.partial || generation.sourceContent, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }) : [], readingRegex: generation.readingRegex, instruction: generation.instruction, complete: false, mode, phoneAppearance: appearance, targetWords: mode === 'prose' ? settings.words : 0, targetMessages: mode === 'phone' ? settings.targetMessages : 0, themeId: readingTheme?.id || '', readingTheme }); chapterIndex = generation.story.chapters.length - 1; await persist(); }
         catch (saveError) { report(saveError); }
       }
       if (!continuing && generation.story && generation.story.chapters.length === 0) {
@@ -942,24 +944,86 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       const image = url ? el('img', { src: host.previewImage?.(url) || url, alt: item.name || '表情包', loading: 'lazy', referrerpolicy: 'no-referrer', onLoad: () => { fallback.hidden = true; }, onError: e => { e.target.hidden = true; fallback.hidden = false; } }) : null;
       return el('span', { class: className }, fallback, image);
     };
+    async function commitStickers(patch) {
+      clearTimeout(saveTimer);
+      const next = { ...state, settings: { ...state.settings, ...patch } };
+      // Debounced/generation saves wait until the image transaction commits,
+      // then capture the current state instead of queuing the old catalogue.
+      imageCommit = store.save(next).then(() => { Object.assign(state.settings, patch); });
+      try { await imageCommit; } finally { imageCommit = null; }
+    }
+    function batchEditor() {
+      const draft = state.settings.stickerBatchDraft;
+      if (!draft?.items?.length) return;
+      let pop;
+      const body = el('div', { class: 'sticker-batch-body' });
+      const feedback = el('p', { role: 'alert', class: 'sticker-editor-error' });
+      const drawEditor = () => {
+        const i = Math.max(0, Math.min(draft.items.length - 1, draft.selected || 0)), item = draft.items[i]; draft.selected = i;
+        const choose = n => { draft.selected = n; scheduleSave(); drawEditor(); };
+        const field = (title, key, max) => label(title, el(key === 'description' ? 'textarea' : 'input', { value: item[key], maxlength: max, rows: 3, onInput: e => { item[key] = e.target.value; scheduleSave(); } }));
+        body.replaceChildren(el('div', { class: 'sticker-batch-picks', role: 'group', 'aria-label': '待添加的表情包' }, draft.items.map((row, n) => button(thumbnail(row), () => choose(n), { 'aria-label': `填写第 ${n + 1} 张表情包`, 'aria-pressed': n === i }))),
+          el('p', { class: 'muted' }, `第 ${i + 1} / ${draft.items.length} 张`), field('表情包名字', 'name', 120), field('描述', 'description', 1000),
+          el('div', { class: 'actions' }, button('上一张', () => choose(i - 1), { disabled: i === 0 }), button('下一张', () => choose(i + 1), { disabled: i === draft.items.length - 1 })));
+      };
+      drawEditor();
+      pop = popup('添加表情包', el('div', {}, body, feedback), [button('关闭', () => pop.close()), button('保存全部', () => action(async () => {
+        feedback.textContent = '';
+        const names = new Set(state.settings.stickers.map(item => item.name.trim()));
+        const items = draft.items.map(item => ({ name: item.name.trim(), url: safeStickerUrl(item.url), description: item.description.trim() }));
+        for (let i = 0; i < items.length; i++) {
+          if (!items[i].name || !items[i].url || names.has(items[i].name)) {
+            draft.selected = i; drawEditor(); feedback.textContent = !items[i].name ? '请填写表情包名字。' : !items[i].url ? '这张图片无法读取，请重新选择。' : '已有同名表情包，请换一个名字。'; return;
+          }
+          names.add(items[i].name);
+        }
+        if (state.settings.stickers.length + items.length > 500) { feedback.textContent = '最多保存 500 个表情包。'; return; }
+        body.inert = true;
+        try { await commitStickers({ stickers: [...state.settings.stickers, ...items], stickerBatchDraft: null }); pop.close(); draw(); }
+        catch (error) { feedback.textContent = error.message; }
+        finally { body.inert = false; }
+      }), { class: 'primary' })]);
+    }
     const editSticker = index => {
+      if (index === null && state.settings.stickerBatchDraft?.items?.length) { batchEditor(); return; }
       const old = state.settings.stickerDraft;
       const draft = old && old.index === index ? old : { index, item: { ...(index === null ? { name: '', url: '', description: '' } : state.settings.stickers[index]) } };
       state.settings.stickerDraft = draft; scheduleSave();
-      const field = (title, key, max, placeholder) => label(title, el(key === 'description' ? 'textarea' : 'input', { value: draft.item[key], maxlength: max, rows: key === 'description' ? 3 : null, placeholder, onInput: e => { draft.item[key] = e.target.value; scheduleSave(); } }));
+      const control = (key, max, placeholder, attrs = {}) => el(key === 'description' ? 'textarea' : 'input', { value: key === 'url' && localStickerUrl(draft.item.url) ? '' : draft.item[key], maxlength: max, rows: key === 'description' ? 3 : null, placeholder, onInput: e => { draft.item[key] = e.target.value; scheduleSave(); }, ...attrs });
+      const field = (title, key, max, placeholder) => label(title, control(key, max, placeholder));
       const feedback = el('p', { role: 'alert', class: 'sticker-editor-error' });
       const invalid = message => { feedback.textContent = message; throw new Error(message); };
       let pop;
-      pop = popup(index === null ? '添加表情包' : '修改表情包', el('div', {}, field('表情包名字', 'name', 120, '猫猫点头'), field('图片地址', 'url', 4000, 'https://…'), field('描述', 'description', 1000, '开心地赞同、答应对方'), feedback),
+      const upload = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple: index === null, hidden: true, onChange: e => action(async () => {
+        const files = Array.from(e.target.files || []); e.target.value = ''; if (!files.length) return;
+        feedback.textContent = '正在读取图片…'; pop.inert = true;
+        try {
+          if (index !== null && files.length !== 1) throw new Error('修改表情包时请选择一张图片。');
+          const items = await readStickerFiles(files);
+          if (disposed) return;
+          if (index === null) {
+            await commitStickers({ stickerBatchDraft: { items, selected: 0 } }); pop.close(); batchEditor();
+          } else {
+            const next = { ...draft, item: { ...draft.item, url: items[0].url } };
+            await commitStickers({ stickerDraft: next }); pop.close(); editSticker(index);
+          }
+        } catch (error) { feedback.textContent = error.message; }
+        finally { pop.inert = false; }
+      }) });
+      const imageId = 'sticker-image-' + id();
+      const imageField = el('div', { class: 'field' },
+        el('div', { class: 'sticker-image-heading' }, el('label', { class: 'field-label', for: imageId }, '图片地址'), button('本地上传', () => upload.click(), { class: 'text-button' })),
+        control('url', 4000, localStickerUrl(draft.item.url) ? '填写新直链可替换本地图片' : 'https://…', { id: imageId, 'aria-label': '图片地址' }), upload);
+      pop = popup(index === null ? '添加表情包' : '修改表情包', el('div', {}, field('表情包名字', 'name', 120, '猫猫点头'), imageField, localStickerUrl(draft.item.url) ? thumbnail(draft.item) : null, field('描述', 'description', 1000, '开心地赞同、答应对方'), feedback),
         [button('取消', () => { pop.close(); draw(); }), button('保存', () => action(async () => {
           const item = { name: draft.item.name.trim(), url: safeStickerUrl(draft.item.url.trim()), description: draft.item.description.trim() };
           feedback.textContent = '';
           if (!item.name) return invalid('请填写表情包名字。');
-          if (!item.url) return invalid('请填写 HTTP(S) 图片直链。');
+          if (!item.url) return invalid('请填写 HTTP(S) 图片直链或选择本地图片。');
           if (state.settings.stickers.some((row, i) => i !== index && row.name.trim() === item.name)) return invalid('已有同名表情包，请换一个名字。');
-          if (index === null) { if (state.settings.stickers.length >= 500) return invalid('最多保存 500 个表情包。'); state.settings.stickers.push(item); }
-          else state.settings.stickers[index] = item;
-          state.settings.stickerDraft = null; await persist(); pop.close(); draw();
+          if (index === null && state.settings.stickers.length >= 500) return invalid('最多保存 500 个表情包。');
+          const stickers = [...state.settings.stickers]; if (index === null) stickers.push(item); else stickers[index] = item;
+          await commitStickers({ stickers, stickerDraft: null }); pop.close(); draw();
         }), { class: 'primary' })]);
       pop.addEventListener('close', draw, { once: true });
     };
@@ -1120,7 +1184,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (launcher.parentElement === root) placeLauncher();
   });
   launcherObserver.observe(root, { childList: true });
-  const flushInputs = () => { if (!ready || disposed) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
+  const flushInputs = () => { if (!ready || disposed || imageCommit) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
   const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { flushInputs(); persist().catch(report); } };
   const beforeUnload = e => { flushInputs(); if (task || editing) { e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('resize', placeLauncher); window.addEventListener('beforeunload', beforeUnload);
@@ -1211,5 +1275,5 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   host.onCharacterChange?.(() => { if (ready) refreshCatalog(false); });
   if (preview) open();
   const initialLoad = initialize();
-  return { open, ready: initialLoad, retry: initialize, async dispose() { disposed = true; finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); if (ready) await store.save(state).catch(() => {}); await store?.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
+  return { open, ready: initialLoad, retry: initialize, async dispose() { disposed = true; finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); if (imageCommit) await imageCommit.catch(() => {}); if (ready) await store.save(state).catch(() => {}); await store?.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
 }

@@ -2,6 +2,7 @@ import { USER_AVATAR, CHAR_AVATAR } from './avatar-data.js';
 // Shared by the sandboxed reader, theme preview, and exported reading files.
 export const PHONE_CSS = `
 html{color-scheme:light}
+.phone-group .message-sender{font:11px/1.5 system-ui;opacity:.65;margin:0 0 4px;max-width:100%;overflow-wrap:anywhere}.phone-group .group-event{text-align:center;font-size:12px;opacity:.6;margin:14px 0}.phone-group .group-event .call-record{justify-content:center}.phone+.phone{margin-top:20px}
 body.phone-reader,.phone-chapter{background:transparent!important}
 .phone{--user-avatar:url("${USER_AVATAR}");--char-avatar:url("${CHAR_AVATAR}");--avatar-size:32px;--message-gap:8px}
 .message{flex-direction:row;align-items:flex-start;gap:var(--message-gap);margin:18px 0}.message.own{flex-direction:row-reverse;align-items:flex-start}

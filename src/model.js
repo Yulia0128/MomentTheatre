@@ -7,7 +7,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.1.6';
+export const VERSION = '1.1.8';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -30,12 +30,12 @@ export function newStory({ title, prompt, mode, themeId, snapshot }) {
     themeId, snapshot: clone(snapshot), chapters: [], categoryIds: [], tags: [], saved: false,
     continuationDraft: '', continuationMode: mode === 'html' ? '' : normalizeMode(mode), summaries: [], createdAt: Date.now(), updatedAt: Date.now() };
 }
-export function appendChapter(story, { content, instruction = '', complete = true, mode = story.mode, themeId = story.themeId, readingTheme = null, phoneAppearance, wordCount = 0, targetWords = 0, messageCount = 0, targetMessages = 0, sourceContent = '', readingRegex = [] }) {
+export function appendChapter(story, { content, instruction = '', complete = true, mode = story.mode, themeId = story.themeId, readingTheme = null, phoneAppearance, stickerSnapshot = [], wordCount = 0, targetWords = 0, messageCount = 0, targetMessages = 0, sourceContent = '', readingRegex = [] }) {
   if (!text(content).trim()) throw new Error('没有可保存的生成内容。');
   if ((story.mode === 'html' || mode === 'html') && (story.mode !== 'html' || mode !== 'html' || story.chapters.length)) throw new Error('HTML 作品独立保存，不支持续写或混合章节。');
   const last = story.chapters.at(-1);
   if (last && !last.complete) throw new Error('请先整理未完成的最后一节，再继续续写。');
-  story.chapters.push({ id: id(), content: text(content), sourceContent: text(sourceContent), readingRegex: normalizeRegexRules(readingRegex), instruction: text(instruction), complete, mode, themeId, readingTheme: mode !== 'html' && readingTheme ? captureReadingTheme(readingTheme, mode) : null, ...(mode === 'phone' && phoneAppearance !== undefined ? { phoneAppearance: normalizePhoneAppearance(phoneAppearance) } : {}), wordCount, targetWords, messageCount, targetMessages, createdAt: Date.now() });
+  story.chapters.push({ id: id(), content: text(content), sourceContent: text(sourceContent), readingRegex: normalizeRegexRules(readingRegex), stickerSnapshot: normalizeStickers(stickerSnapshot), instruction: text(instruction), complete, mode, themeId, readingTheme: mode !== 'html' && readingTheme ? captureReadingTheme(readingTheme, mode) : null, ...(mode === 'phone' && phoneAppearance !== undefined ? { phoneAppearance: normalizePhoneAppearance(phoneAppearance) } : {}), wordCount, targetWords, messageCount, targetMessages, createdAt: Date.now() });
   story.continuationMode = mode === 'html' ? '' : mode;
   story.updatedAt = Date.now();
   return story;
@@ -85,6 +85,11 @@ export function normalizeState(raw) {
     const item = normalizeStickers([s.stickerDraft.item])[0];
     const index = Number.isInteger(s.stickerDraft.index) && s.stickerDraft.index >= 0 && s.stickerDraft.index < state.settings.stickers.length ? s.stickerDraft.index : null;
     state.settings.stickerDraft = { index, item };
+  }
+  if (Object.hasOwn(s, 'stickerBatchDraft')) {
+    const batch = s.stickerBatchDraft;
+    const items = batch && Array.isArray(batch.items) ? normalizeStickers(batch.items).slice(0, 9) : [];
+    state.settings.stickerBatchDraft = items.length ? { items, selected: Math.max(0, Math.min(items.length - 1, Math.floor(Number(batch.selected) || 0))) } : null;
   }
   state.settings.personaMode = s.personaMode === 'custom' ? 'custom' : 'current';
   state.settings.customPersonaName = text(s.customPersonaName, 120);
