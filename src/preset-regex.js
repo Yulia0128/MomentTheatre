@@ -50,14 +50,18 @@ function sliceSegments(parts, start, end) {
   });
 }
 export function transformProse(raw, rules = [], snapshot = {}) {
-  let parts = [{ text: extractTitle(stripDefaultFilters(raw), 'prose').content, html: false }];
+  const filtered = stripDefaultFilters(raw), body = extractTitle(filtered, 'prose').content;
+  const trace = { input: String(raw ?? '').length, filtered: filtered.length, body: body.length, rules: [] };
+  let parts = [{ text: body, html: false }];
   const warnings = [], scripts = [];
   for (const rule of normalizeRegexRules(rules)) {
     if (rule.disabled) continue;
+    const step = { number: trace.rules.length + 1, before: parts.reduce((n,p) => n + p.text.length, 0), matches: 0 };
     try {
       const expression = rule.substituteRegex ? macros(rule.findRegex, snapshot, rule.substituteRegex === 2) : rule.findRegex;
       const regex = compileRegex(expression), text = parts.map(p => p.text).join(''), next = []; let last = 0;
       text.replace(regex, (...args) => {
+        step.matches++;
         const groups = typeof args.at(-1) === 'object' ? args.at(-1) : null;
         const offset = args.at(groups ? -3 : -2), captures = args.slice(0, groups ? -3 : -2);
         next.push(...sliceSegments(parts, last, offset));
@@ -86,8 +90,9 @@ export function transformProse(raw, rules = [], snapshot = {}) {
       if (next.reduce((n,p) => n + p.text.length, 0) > 2000000) throw new Error('替换结果过长');
       parts = next.reduce((out, part) => { if (!part.text) return out; const last = out.at(-1); if (last?.html === part.html && last?.card === part.card) last.text += part.text; else out.push(part); return out; }, []);
     } catch (error) { warnings.push(`正则「${rule.scriptName}」未应用：${error.message}`); }
+    step.after = parts.reduce((n,p) => n + p.text.length, 0); trace.rules.push(step);
   }
-  return { parts, warnings, scripts };
+  return { parts, warnings, scripts, trace };
 }
 function safeCss(css, context = 'stylesheet', scoped = true) {
   if (css.length > 100000 || /<\/style|expression\s*\(/i.test(css)) throw new Error('美化样式包含不支持的内容');
@@ -118,9 +123,9 @@ function cleanMarkup(joined, warnings, scoped) {
   return {content, css:styles.join('\n')};
 }
 export function renderRegexProse(raw, rules, snapshot, chapter = 1, nonce = cardToken()) {
-  const { parts, warnings, scripts } = transformProse(raw, rules, snapshot);
+  const { parts, warnings, scripts, trace } = transformProse(raw, rules, snapshot);
   const prose = text => text.split(/\n\s*\n/).filter(p => p.trim()).map(p => '<p class="paragraph">' + renderProseInline(p) + '</p>').join('');
-  if (!parts.some(part => part.html)) return {html:parts.map(part => prose(part.text)).join(''),warnings,cards:0};
+  if (!parts.some(part => part.html)) return {html:parts.map(part => prose(part.text)).join(''),warnings,cards:0,trace};
   const unfence = text => text.replace(/^\s*\x60\x60\x60(?:html)?\s*\n?|\n?\x60\x60\x60\s*$/gi, '');
   const fragments = [], cards = [];
   for (let i=0;i<parts.length;i++) {
@@ -138,5 +143,5 @@ export function renderRegexProse(raw, rules, snapshot, chapter = 1, nonce = card
   let content = cleaned.content;
   for (const card of cards) content = content.replace('<span data-regex-frame="' + card.id + '"></span>', () => card.html);
   const html = '<div class="preset-markup" data-regex-block="' + key + '">' + (cleaned.css ? '<style>@scope ([data-regex-block="' + key + '"]) { ' + cleaned.css + ' }</style>' : '') + content + '</div>';
-  return {html, warnings:[...new Set(warnings)], cards:cards.length};
+  return {html, warnings:[...new Set(warnings)], cards:cards.length,trace};
 }

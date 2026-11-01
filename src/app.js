@@ -22,6 +22,7 @@ import { VERSION, modeLabel, clone, id, newStory, appendChapter, invalidateSumma
 import { LibraryStore } from './storage.js';
 import { BUILTIN_THEMES, validateTheme, resolveTheme, captureReadingTheme, resolveChapterTheme, removeImportedTheme } from './themes.js';
 import { renderReader } from './reader.js';
+import { proseDiagnosticText, originalProse } from './prose-diagnostics.js';
 import { cleanHtml, htmlIssue, htmlDocument, HTML_SANDBOX } from './html-work.js';
 import { PHONE_EXAMPLES } from './phone-examples.js';
 import { phoneIcon } from './phone-assets.js';
@@ -258,9 +259,10 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       return el('iframe', { class: 'reader-frame html-frame', title: `${story.title} HTML 作品`, sandbox: HTML_SANDBOX, referrerpolicy: 'no-referrer', allow: 'fullscreen', srcdoc: htmlDocument(chapter.content, chapter.readingRegex, story.snapshot, warnings => { for(const warning of warnings) if(!readingWarnings.has(warning)) { readingWarnings.add(warning); report(new Error(warning), 'HTML 过滤'); } }) });
     }
     const themeForChapter = ch => previewThemeId ? resolveTheme(state, ch.mode || story.mode, previewThemeId) : resolveChapterTheme(state, story, ch);
+    const issues = [];
     const html = renderReader(story, themeForChapter(story.chapters[index ?? 0] || {}), index, themeForChapter, warnings => {
       for (const warning of warnings) if (!readingWarnings.has(warning)) { readingWarnings.add(warning); report(new Error(warning), '正文正则'); }
-    });
+    }, { emptyNotice: false, onEmpty: (issue, number) => issues.push({ ...issue, chapter: number }) });
     const token = readerToken(html);
     const frame = el('iframe', { class: mode === 'phone' ? 'reader-frame phone-frame' : 'reader-frame prose-frame', title: story.title + '阅读区', sandbox: token ? 'allow-scripts allow-same-origin' : '', referrerpolicy: 'no-referrer' });
     if (token) readerTokens.set(frame, token);
@@ -269,6 +271,24 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     // Every rule script remains in a separate allow-scripts-only opaque card.
     if (host.prepareReaderHtml) frame.srcdoc = host.prepareReaderHtml(html);
     else readerAssets.prepare(html).then(doc => { if (!disposed) frame.srcdoc = doc; });
+    if (issues.length) {
+      let raw = false;
+      const rawText = issues.map(issue => originalProse(story.chapters[issue.chapter - 1])).join('\n\n');
+      const rawView = el('pre', { class: 'raw-prose-view', hidden: true, tabindex: 0, role: 'region', 'aria-label': '原文阅读' }, rawText);
+      const message = el('p', { role: 'status' }, issues[0].message);
+      const toggle = button('直接阅读原文', () => {
+        raw = !raw;
+        rawView.hidden = !raw; frame.hidden = raw;
+        message.textContent = raw ? '正在临时阅读原文，可能包含思考或标签；作品和规则未修改。' : issues[0].message;
+        toggle.textContent = raw ? '返回原显示' : '直接阅读原文';
+      }, { class: 'text-button' });
+      const diagnostic = button('复制诊断信息', async () => {
+        const value = proseDiagnosticText(issues, VERSION);
+        try { await navigator.clipboard.writeText(value); notify('诊断信息已复制，不含故事正文和 API 密钥。'); }
+        catch { popup('手动复制诊断信息', el('textarea', { rows: 12, value, readonly: true })); }
+      }, { class: 'text-button' });
+      return el('div', { class: 'reader-recovery' }, el('div', { class: 'prose-recovery' }, message, el('div', { class: 'actions' }, toggle, diagnostic)), frame, rawView);
+    }
     return frame;
   }
   function summary(mode, words, themeId) {
@@ -287,6 +307,14 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function generationPage() {
     const story = current(), page = el('section', { class: 'page generation-page' });
     const hasChapters = Boolean(story?.chapters.length), mode = state.draft.mode;
+    if (preview && host.proseCases) page.append(el('details', { class: 'prose-recovery', open: true },
+      el('summary', {}, '仅预览 · 空白正文模拟'), el('div', { class: 'actions' }, host.proseCases.map(item => button(item.label, () => {
+        if (task || editing) return notify('请先结束生成或保存编辑。');
+        const sample = item.create();
+        state.stories = [sample, ...state.stories.filter(s => s.id !== sample.id)];
+        storyId = sample.id; chapterIndex = 0; generationError = null; continuationOpen = false;
+        scheduleSave(); render();
+      }, { class: 'text-button' })))));
     const drafts = state.stories.filter(item => !item.saved && item.chapters.length && item.id !== story?.id);
     const resume = item => { storyId=item.id;chapterIndex=Math.max(0,item.chapters.length-1);continuationOpen=false;render(); };
     page.append(el('div', { class: 'page-heading' }, el('h1', {}, '番外'), el('div', { class: 'heading-actions' }, drafts.length ? button('返回草稿', () => {

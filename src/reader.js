@@ -5,6 +5,7 @@ import { PHONE_CSS } from './phone-style.js';
 import { PROSE_CSS } from './prose.js';
 import { compileThemeCss } from './theme-css.js';
 import { renderRegexProse } from './preset-regex.js';
+import { emptyProseIssue, originalProse } from './prose-diagnostics.js';
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export { PHONE_TYPES, parsePhone } from './phone-format.js';
 import { parsePhone, resolveMessageStickers } from './phone-format.js';
@@ -46,7 +47,7 @@ function phoneHtml(messages, characterName, appearance, chapterNumber) {
     return `<div class="message ${m.sender === 'user' ? 'own' : ''}" data-type="${m.type}"><span class="message-avatar${nameAvatar ? ' name-avatar' : ''}" role="img" aria-label="${escapeHtml(nameAvatar ? senderName + '的头像' : m.sender === 'user' ? '我方头像' : '对方头像')}"${nameAvatar ? ` style="background-image:none!important;background-color:hsl(${hue} 35% 85%)!important;color:#292a27!important;display:flex!important;align-items:center;justify-content:center;font:500 15px/1 system-ui"` : ''}>${nameAvatar ? escapeHtml(Array.from(senderName)[0] || '友') : ''}</span><div class="message-content">${nameAvatar ? `<span class="message-sender">${escapeHtml(senderName)}</span>` : ''}<div class="bubble">${inner}</div>${m.time ? `<time class="message-time">${escapeHtml(m.time)}</time>` : ''}</div></div>`;
   }).join('')}</div><div class="phone-footer" aria-hidden="true"><span class="phone-input"></span>${phoneIcon('plus')}</div><div class="phone-home" aria-hidden="true"></div></div></div>`;
 }
-export function renderReader(story, theme, chapterIndex = null, themeForChapter = null, onWarnings = null) {
+export function renderReader(story, theme, chapterIndex = null, themeForChapter = null, onWarnings = null, options = {}) {
   const chapters = chapterIndex === null ? story.chapters : [story.chapters[chapterIndex]].filter(Boolean);
   const phoneOnly = chapterIndex !== null && (chapters[0]?.mode || story.mode) === 'phone';
   const proseOnly = chapters.length > 0 && chapters.every(ch => (ch.mode || story.mode) === 'prose');
@@ -75,6 +76,12 @@ export function renderReader(story, theme, chapterIndex = null, themeForChapter 
       const rendered = renderRegexProse(chapter.content, chapter.readingRegex, story.snapshot || {}, n, nonce);
       cards += rendered.cards || 0;
       content = rendered.html;
+      const issue = emptyProseIssue(chapter, rendered);
+      if (issue) {
+        options.onEmpty?.(issue, n);
+        if (options.rawChapters?.includes(n)) content = `<pre class="paragraph raw-prose">${escapeHtml(originalProse(chapter))}</pre>`;
+        else if (options.emptyNotice !== false) content = `<p class="diagnostic">${escapeHtml(issue.message)}请在瞬息中打开这篇作品，选择直接阅读原文，或从编辑中查看。</p>`;
+      }
       if (rendered.warnings.length) {
         onWarnings?.(rendered.warnings);
         content += rendered.warnings.map(w => `<p class="diagnostic">${escapeHtml(w)}</p>`).join('');
