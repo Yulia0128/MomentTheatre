@@ -6,6 +6,6 @@
   "dependencies": [],
   "js": "index.js",
   "author": "瞬息",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "minimum_client_version": "1.15.0"
 }

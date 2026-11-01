@@ -29,6 +29,7 @@ import { phoneIcon } from './phone-assets.js';
 import { generateChapter, ensureSummaries, contentLength } from './generation.js';
 import { errorRecord } from './errors.js';
 import { categoryFiles, makeZip, download } from './archive.js';
+import { canExportText, storyHtmlFile, storyTextFile } from './story-export.js';
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -509,6 +510,24 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       story.title = title.value.trim() || story.title; story.tags = parseTags(tags.value);
       story.categoryIds = [...categorySet]; story.saved = true; story.updatedAt = Date.now(); await persist(); pop.close(); render(); notify('已保存到收藏。');
     }), { class: 'primary' })]);
+    const exportButton = button('导出', () => exportStory({ ...story, title: title.value.trim() || story.title }), { class: 'text-button save-story-export', disabled: !story.chapters.length });
+    const heading = pop.querySelector('.popup-heading');
+    heading.insertBefore(exportButton, heading.lastElementChild);
+  }
+  function exportStory(story) {
+    const snapshot = clone(story), error = el('p', { class: 'form-error', hidden: true, role: 'alert' });
+    const exportFile = format => action(async () => {
+      error.hidden = true; pop.inert = true;
+      try {
+        const file = format === 'txt' ? await storyTextFile(state, snapshot) : storyHtmlFile(state, snapshot);
+        download(file.content, file.name, file.type); pop.close(); notify('整篇番外已导出。');
+      } catch (e) { error.textContent = e.message; error.hidden = false; }
+      finally { pop.inert = false; }
+    });
+    const pop = popup('导出番外', el('div', {}, el('p', {}, '按章节顺序导出整篇番外。'), error), [
+      button('取消', () => pop.close()), button('HTML', () => exportFile('html'), { class: 'primary' }),
+      canExportText(snapshot) ? button('TXT', () => exportFile('txt'), { class: 'outline' }) : null,
+    ]);
   }
   function copyStory(story) {
     if (story.mode === 'html') {
