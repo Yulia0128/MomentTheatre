@@ -21,6 +21,7 @@ import { parsePhoneReport, serializePhone, safeStickerUrl, editablePhoneText, sa
 import { PROSE_PREVIEW_TITLE, PROSE_PREVIEW_CONTENT } from './theme-preview.js';
 import { VERSION, modeLabel, clone, id, newStory, appendChapter, invalidateSummaries, removeCategory, filterStories, normalizeState } from './model.js';
 import { LibraryStore } from './storage.js';
+import { LibraryLocation } from './library-location.js';
 import { BUILTIN_THEMES, validateTheme, resolveTheme, captureReadingTheme, resolveChapterTheme, removeImportedTheme } from './themes.js';
 import { renderReader } from './reader.js';
 import { proseDiagnosticText, originalProse } from './prose-diagnostics.js';
@@ -89,7 +90,9 @@ function windowIcon(kind) {
 export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const previous = document.getElementById('shunxi-extension-root');
   if (previous) return;
-  let store = null, state = null, ready = false, loading = null, startupError = null;
+  let store = null, state = null, ready = false, loading = null, startupError = null, startupDiagnostic = null;
+  let libraryAttempted = false;
+  const libraryLocation = new LibraryLocation(host.scope);
   let catalog = { characters: [], personas: [], books: [], presets: [] };
   let tab = 'generate', storyId = null, chapterIndex = 0, continuationOpen = false;
   let category = 'all', tag = '', query = '', skinPreview = 'prose', task = null, editing = false, editText = '';
@@ -267,16 +270,20 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function applyReadOnly(){
     const locked=ready&&store.health.writable===false;
     protection.hidden=!locked;
-    if(locked&&!protection.children.length)protection.append(el('span',{},'资料完整性检查未通过，当前仅供阅读；保存、同步和完整备份已暂停。'),button('复制诊断',async()=>{
-      const value=JSON.stringify({appVersion:VERSION,...store.diagnostic()},null,2);
-      try{await navigator.clipboard.writeText(value);notify('诊断信息已复制。');}catch{popup('手动复制诊断信息',el('textarea',{rows:10,value,readonly:true}));}
-    },{class:'text-button'}));
+    if(locked&&!protection.children.length)protection.append(el('span',{},'资料完整性检查未通过，当前仅供阅读；保存、同步和完整备份已暂停。'),
+      button('复制诊断',()=>copyLibraryDiagnostic(store.diagnostic()),{class:'text-button'}),
+      button('重新检查',()=>initialize(),{class:'text-button'}),button('继续使用瞬息',()=>initialize(true),{class:'text-button'}));
     if(!locked)protection.replaceChildren();
     if(!locked)return;
     for(const control of shadow.querySelectorAll('input,textarea,select,button')){
       if(control.matches('.tabs button,.story-title,.chapter-buttons button,.reading-toggle,.library-protection button,textarea[readonly]')||['收起瞬息，生成继续','关闭'].includes(control.getAttribute('aria-label'))||['关闭','取消','复制'].includes(control.textContent.trim()))continue;
       control.disabled=true;
     }
+  }
+  async function copyLibraryDiagnostic(diagnostic){
+    const value=JSON.stringify({appVersion:VERSION,...diagnostic},null,2);
+    try{await navigator.clipboard.writeText(value);notify('诊断信息已复制。');}
+    catch{popup('手动复制诊断信息',el('textarea',{rows:10,value,readonly:true}));}
   }
   async function captureLegacyHtmlFilters(story) {
     if (story.snapshot?.htmlFiltersCaptured) return;
@@ -1309,7 +1316,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.2：条目手动保存，优化编辑与保存卡顿。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.3：旧资料打不开时可继续使用瞬息。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -1405,14 +1412,21 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     content.replaceChildren(el('section', { class: 'page startup-page', 'aria-busy': !startupError },
       el('h1', {}, startupError ? '资料暂时无法打开' : '正在读取资料…'),
       startupError ? el('p', { class: 'startup-message', role: 'alert' }, message) : null,
-      startupError ? el('p', { class: 'muted' }, '原资料不会被空白资料替换。请根据上面的原因处理后重试。') : null,
-      startupError ? button('重试', () => initialize(), { class: 'outline' }) : null));
+      startupError ? el('p', { class: 'muted' }, libraryAttempted ? '可以继续使用新的本地资料库，旧资料单独保留。' : '请检查扩展文件与浏览器权限后重试。') : null,
+      startupError ? el('div', { class: 'actions' }, libraryAttempted ? button('继续使用瞬息', () => initialize(true), { class: 'primary' }) : null,
+        button('重试', () => initialize(), { class: 'outline' }),startupDiagnostic ? button('复制诊断',()=>copyLibraryDiagnostic(startupDiagnostic),{class:'text-button'}) : null) : null));
   }
-  function initialize() {
-    if (loading || ready || disposed) return loading;
-    startupError = null; renderStartup();
+  function initialize(fresh = false) {
+    if (loading || disposed || ready && store.health.writable) return loading;
+    if (task) { stop(); notify('正在停止生成，请稍后再试。'); return; }
+    ready = false; protection.hidden = true; libraryAttempted = false;
+    autoSync?.dispose(); autoSync = null; sync?.dispose(); sync = null;
+    clearTimeout(saveTimer); saveTimer = null; saveAgain = false;
+    editing = false; editText = ''; storyId = null; chapterIndex = 0;
+    startupError = null; startupDiagnostic = null; renderStartup();
     // Defer work until loading holds the promise, so repeated clicks share one attempt.
     loading = Promise.resolve().then(async () => {
+      let phase = 'open';
       try {
         if (disposed) return;
         if (stylesheet === null) {
@@ -1422,15 +1436,26 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         }
         if (disposed) return;
         startupStyle.textContent = stylesheet;
-        store = new LibraryStore(host.scope);
+        if (store) await store.close(); if (disposed) return;
+        libraryAttempted = true;
+        phase = 'location';
+        const route = fresh ? libraryLocation.next() : libraryLocation.current();
+        store = new LibraryStore(route.scope, undefined, null, { databaseName: route.databaseName });
         store.onHealth=health=>{if(ready&&!health.writable){autoSync?.pause();task?.controller.abort();applyReadOnly();}};
+        phase = 'open';
         let loaded = await store.open();
         if (disposed) return;
+        phase = 'startup-validation';
         loaded.themes = loaded.themes.map(validateTheme);
         const retained = limitDraftStories(loaded);
         if (store.health.writable&&retained !== loaded) { await store.save(retained); loaded = retained; }
         if (store.health.writable&&migrateStickerCatalogue(loaded.settings)) await store.save(loaded);
         if (disposed) return;
+        if (fresh) {
+          if (!store.health.writable) throw new Error('新的资料库暂时无法使用，请重试。');
+          await store.save(loaded); if (disposed) return;
+          phase = 'location'; libraryLocation.activate(route);
+        }
         state = loaded; storyId = state.stories[0]?.id || null;
         if (state.editorDraft) {
           const saved = state.stories.find(story => story.id === state.editorDraft.storyId);
@@ -1443,7 +1468,10 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         nativePanel?.sync(!launcher.hidden);
         themeButton.disabled = false; themeButton.replaceChildren(windowIcon(state.settings.theme));
         placeLauncher(); content.replaceChildren(); panes.clear(); render(); initializeSync();
+        if (fresh) notify('已进入新的本地资料库，可以继续使用瞬息。');
       } catch (error) {
+        const diagnostic=store?.diagnostic?.();
+        if(diagnostic)startupDiagnostic={...diagnostic,stages:phase==='location'?{location:1}:Object.keys(diagnostic.stages||{}).length?diagnostic.stages:{[phase]:1}};
         ready = false; state = null; editing = false; editText = ''; storyId = null; chapterIndex = 0; panes.clear();
         nativePanel?.sync(!launcher.hidden, true);
         autoSync?.dispose();autoSync=null;sync?.dispose(); sync = null;

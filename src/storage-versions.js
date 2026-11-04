@@ -6,14 +6,41 @@ import {writeTransaction,readValue,readValues,storeKeys,completeTransaction} fro
 export const VERSION_STORES=['accounts','avatars','libraryRecords','libraryVersions','libraryCommits'];
 const conflict=()=>Error('另一页面已修改资料或同步期间出现新输入，本次保存失败；原有效版本仍保留。');
 export class LibraryVersions {
-  constructor(owner){this.owner=owner;this.current=null;this.previous=null;this.legacyRefs=new Set();}
+  constructor(owner){this.owner=owner;this.current=null;this.previous=null;this.legacyRefs=new Set();this.legacyIndexKnown=false;this.archiveMode='unknown';}
   get db(){return this.owner.db;}
   get scope(){return this.owner.scope;}
   get headKey(){return [this.scope,'v3-head'];}
+  get archiveKey(){return [this.scope,'legacy-assets'];}
   health(kind,issues=[]){this.owner.health={kind,writable:kind==='healthy',issues:issues.map(x=>({stage:x.stage||'integrity'}))};try{this.owner.onHealth?.(this.owner.health);}catch{/* UI notification cannot change storage integrity. */}}
   async keys(store){return (await storeKeys(this.db,store)).filter(key=>Array.isArray(key)&&key[0]===this.scope);}
   async recordDigest(node){
     return JSON.stringify(node)?.length>8192?this.owner.compute.run('digest',node):digest(node);
+  }
+  async readLegacy(key,stage){
+    try{const raw=await readValue(this.db,'accounts',key);return {raw,row:await this.owner.decodeRow(raw)};}
+    catch(error){this.health('unavailable',[{stage}]);throw error;}
+  }
+  async loadLegacyReferences(){
+    const hash=/^[a-f0-9]{64}$/;
+    // Separate small keys preserve archive references without repeatedly loading
+    // a large legacy row. This index is optional and can be rebuilt conservatively.
+    const pins=(await this.keys('accounts')).filter(k=>k.length===3&&k[1]==='legacy-asset'&&hash.test(k[2])).map(k=>k[2]).sort();
+    this.legacyRefs=new Set(pins);
+    try{
+      const index=unseal(await readValue(this.db,'accounts',this.archiveKey));
+      if(index.version===1&&index.count===pins.length&&index.root===await this.recordDigest(pins)){
+        this.legacyIndexKnown=true;this.archiveMode='cached';return;
+      }
+    }catch{/* Missing or damaged index never substitutes for current-version checks. */}
+    let unreadable=false,found=false;
+    for(const key of [this.scope,this.scope+':sync-recovery']){
+      try{const raw=await readValue(this.db,'accounts',key);if(raw){found=true;for(const ref of avatarReferences(raw))this.legacyRefs.add(ref);}}
+      catch{unreadable=true;}
+    }
+    if(unreadable){
+      for(const key of await this.keys('avatars'))if(key.length===2&&hash.test(key[1]))this.legacyRefs.add(key[1]);
+      this.archiveMode='isolated';
+    }else this.archiveMode=found?'readable':'none';
   }
   async version(token,recordKeys=null){
     const manifest=unseal(await readValue(this.db,'libraryVersions',[this.scope,token]));
@@ -36,7 +63,7 @@ export class LibraryVersions {
     return {token,manifest,value,state,nodes:decoded.nodes,refs,assets,complete,issues};
   }
   async load(){
-    this.owner.health={kind:'loading',writable:false,issues:[]};this.current=null;this.previous=null;
+    this.owner.health={kind:'loading',writable:false,issues:[]};this.current=null;this.previous=null;this.legacyRefs=new Set();this.legacyIndexKnown=false;this.archiveMode='none';
     let head,headBad=false;
     try{const raw=await readValue(this.db,'accounts',this.headKey);if(raw)head=unseal(raw);}catch{headBad=true;}
     const receipts=[];let receiptsBad=false;
@@ -47,27 +74,25 @@ export class LibraryVersions {
     receipts.sort((a,b)=>b.revision-a.revision);
     if(!head&&!headBad&&!receipts.length&&!receiptsBad){
       if((await this.keys('libraryVersions')).length)throw Error('检测到未确认资料版本，已停止初始化，原记录保留。');
-      const legacy=await readValue(this.db,'accounts',this.scope);
+      const primary=await this.readLegacy(this.scope,'legacy-primary'),legacy=primary.raw;
       if(!legacy){
-        const recovery=await this.owner.decodeRow(await readValue(this.db,'accounts',this.scope+':sync-recovery'));
+        const {row:recovery}=await this.readLegacy(this.scope+':sync-recovery','legacy-recovery');
         if(recovery?.state){this.owner.revision=recovery.revision||0;this.owner.syncMeta=null;this.health('rollback',[{stage:'legacy-primary'}]);return normalizeState(recovery.state);}
         if((await this.keys('libraryRecords')).length||(await this.keys('avatars')).length)throw Error('检测到孤立资料记录，已停止初始化，原记录保留。');
         this.owner.revision=0;this.health('healthy');return emptyState();
       }
-      const row=await this.owner.decodeRow(legacy);
-      const recoveryRaw=await readValue(this.db,'accounts',this.scope+':sync-recovery');
-      const recovery=await this.owner.decodeRow(recoveryRaw);
+      const row=primary.row;
+      const {raw:recoveryRaw,row:recovery}=await this.readLegacy(this.scope+':sync-recovery','legacy-recovery');
       this.legacyRefs=new Set([...avatarReferences(legacy),...avatarReferences(recoveryRaw)]);
+      this.archiveMode='readable';
       const state=normalizeState(row.state);this.owner.revision=legacy.revision||0;this.owner.syncMeta=row.syncMeta||null;
       this.owner.migratedFrom={revision:legacy.revision||0,writer:legacy.writer,sequence:legacy.sequence||0};
       this.health('healthy');
       await this.commit(state,{syncMeta:row.syncMeta||null,recoveryValue:recovery?.state||null,sequence:this.owner.sequence,epoch:this.owner.syncEpoch,migration:true});
       return state;
     }
-    // Retained legacy rows may still own separate assets. Never collect those.
-    for(const key of [this.scope,this.scope+':sync-recovery']){
-      try{for(const hash of avatarReferences(await readValue(this.db,'accounts',key)))this.legacyRefs.add(hash);}catch{headBad=true;}
-    }
+    // Archive I/O is not a failure of a separately verified current version.
+    await this.loadLegacyReferences();
     const ordered=[...new Set([head?.current,head?.previous,...receipts.map(r=>r.token)].filter(Boolean))];
     let partial=null,chosen=null;
     for(const token of ordered){
@@ -82,13 +107,20 @@ export class LibraryVersions {
     }
     chosen ||= partial;
     if(!chosen){
-      const legacy=await this.owner.decodeRow(await readValue(this.db,'accounts',this.scope));
+      const {row:legacy}=await this.readLegacy(this.scope,'legacy-primary');
       if(legacy?.state){this.health('rollback',[{stage:'migration'}]);this.owner.revision=legacy.revision||0;this.owner.syncMeta=legacy.syncMeta||null;return normalizeState(legacy.state);}
       throw Error('保留版本均无法完整读取，原资料未覆盖。请保留现场并使用已有备份。');
     }
     const receipt=receipts.find(r=>r.token===chosen.token);
-    const currentIsGood=chosen.complete&&head?.current===chosen.token&&head.revision===chosen.manifest.revision&&receipt?.root===chosen.manifest.root&&!head.pending&&!headBad&&!receiptsBad;
-    this.health(currentIsGood?'healthy':chosen.complete?'rollback':'partial',chosen.issues.length?chosen.issues:[{stage:'version'}]);
+    const receiptMatches=receipt?.root===chosen.manifest.root&&receipt?.revision===chosen.manifest.revision;
+    const currentIsGood=chosen.complete&&head?.current===chosen.token&&head.revision===chosen.manifest.revision&&receiptMatches&&!head.pending&&!headBad;
+    const issues=[...chosen.issues];
+    if(headBad||!head)issues.push({stage:'head'});
+    if(head?.pending)issues.push({stage:'pending'});
+    if(head&&head.current!==chosen.token)issues.push({stage:'current'});
+    if(head&&head.revision!==chosen.manifest.revision)issues.push({stage:'revision'});
+    if(!receiptMatches)issues.push({stage:'receipt'});
+    this.health(currentIsGood?'healthy':chosen.complete?'rollback':'partial',currentIsGood?[]:issues.length?issues:[{stage:'current'}]);
     this.current=chosen;this.owner.revision=chosen.manifest.revision;this.owner.syncMeta=chosen.value.syncMeta||null;
     if(head?.previous&&head.previous!==chosen.token){try{this.previous=await this.version(head.previous);if(!this.previous.complete&&chosen.complete)this.health('rollback',[{stage:'previous'}]);}catch{if(chosen.complete)this.health('rollback',[{stage:'previous'}]);}}
     this.owner.knownAssets=new Set(chosen.refs);this.owner.knownImages=new Map([...chosen.assets].map(([hash,url])=>[url,hash]));
@@ -135,6 +167,10 @@ export class LibraryVersions {
         if(head.revision!==o.revision||head.pending!==candidate.token||head.current!==(this.current?.token||null))throw conflict();
         const next={version:1,revision:candidate.manifest.revision,current:candidate.token,previous:head.current,pending:null};
         rows.put(seal(next),this.headKey);
+        if(options.archiveIndex){
+          for(const hash of options.archivePins)rows.put(1,[this.scope,'legacy-asset',hash]);
+          rows.put(options.archiveIndex,this.archiveKey);
+        }
         tx.objectStore('libraryCommits').put(seal(candidate.manifest),[this.scope,candidate.token]);
         const versions=new Set([candidate.token,head.current].filter(Boolean));
         const nodes=new Set([...candidate.nodes,...(this.current?.nodes||[])]),refs=new Set([...candidate.refs,...(this.current?.refs||[]),...this.legacyRefs]);
@@ -143,7 +179,7 @@ export class LibraryVersions {
         }
       }catch(error){options.error=error;tx.abort();}
     };
-    try{await done;}catch(error){throw options.error||error;}finally{if(o.activeSync===tx)o.activeSync=null;}
+    try{await done;if(options.archiveIndex)this.legacyIndexKnown=true;}catch(error){throw options.error||error;}finally{if(o.activeSync===tx)o.activeSync=null;}
   }
   async verifyRetained(candidate){
     // Shared nodes were just read back as part of the candidate. Check the old
@@ -160,6 +196,10 @@ export class LibraryVersions {
     const recovery=options.recoveryValue!==undefined?options.recoveryValue:options.recovery?this.current?.value.state||null:this.current?.value.recovery||null;
     const token=id(),input={state,syncMeta:options.syncMeta||null,recovery};
     const {encoded,assets,size}=await o.compute.run('prepare',{input,token,knownImages:o.knownImages});
+    if(!this.legacyIndexKnown){
+      options.archivePins=[...this.legacyRefs].sort();
+      options.archiveIndex=seal({version:1,count:options.archivePins.length,root:await this.recordDigest(options.archivePins)});
+    }
     o.lastCommitStats={candidateBytes:size,retainedVersions:this.current?2:1};
     const manifest={version:1,token,revision:o.revision+1,writer:o.writer,sequence:options.sequence,root:encoded.root};
     let staged=false;

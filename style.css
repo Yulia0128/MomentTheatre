@@ -78,6 +78,7 @@ button:hover{background:transparent}.primary:hover{background:var(--ink);opacity
 .source-menu-heading .icon-button{width:30px;height:34px;padding:4px}
 .source-save-status{font-size:12px;overflow-wrap:anywhere;color:var(--ink);flex-shrink:0}
 .source-save-status[hidden]{display:none}
+.library-protection{max-height:none}
 
 /* 1.0.15: visible header content and hit targets share the same safe-area layout.
    Keep the inset on the header itself, not padding on the top-layer dialog. */
