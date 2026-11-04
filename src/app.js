@@ -184,7 +184,9 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     return choice.menu;
   }
   const dropdownField = (title, menu) => el('div', { class: 'field' }, el('span', { class: 'field-label' }, title), menu);
-  dialog.addEventListener('close', () => { autoSync?.pause(); if(store?.health.writable)persist().catch(report); if (!launcher.hidden) launcher.focus(); });
+  // Inputs are journalled on change; the existing autosave continues while closed.
+  // Merely collapsing must not enqueue another full-library integrity commit.
+  dialog.addEventListener('close', () => { autoSync?.pause(); if (!launcher.hidden) launcher.focus({ preventScroll: true }); });
   dialog.addEventListener('cancel', () => { if (task) notify('已收起，番外仍在生成。'); });
   const current = () => state.stories.find(s => s.id === storyId);
   function notify(message, error = false) {
@@ -867,7 +869,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       const next = await host.catalog();
       if (disposed || request !== catalogRequest) return;
       catalog = next;
-      if (catalog.characterSources) { syncCharacterBooks(state.settings, catalog.characterSources); scheduleSave(); }
+      if (catalog.characterSources && syncCharacterBooks(state.settings, catalog.characterSources)) scheduleSave();
       if (tab === 'settings') render();
       if (showNotice) notify('酒馆资料列表已刷新。');
     } catch (e) { if (!disposed && request === catalogRequest && e.code !== 'CHARACTER_CHANGED') report(e, '读取酒馆资料'); }
@@ -1229,7 +1231,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.0：加强意外中断后的资料保护。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.1：优化打开和收起窗口的卡顿。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {

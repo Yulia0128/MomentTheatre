@@ -1,5 +1,7 @@
 // Keep each character's manual choices while seeding newly linked lorebooks once.
 export function syncCharacterBooks(settings, detail) {
+  const selection = () => JSON.stringify([settings.bookCharacter, settings.books, settings.characterBooks]);
+  const before = selection();
   const previous = settings.bookCharacter || '', key = detail.key || '';
   const records = { ...settings.characterBooks };
   if (previous) records[previous] = { ...(records[previous] || { linked:[] }), selected:[...settings.books] };
@@ -12,4 +14,5 @@ export function syncCharacterBooks(settings, detail) {
   settings.bookCharacter = key;
   if (key) records[key] = { selected:[...settings.books], linked };
   settings.characterBooks = records;
+  return before !== selection();
 }

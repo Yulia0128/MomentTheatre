@@ -1,6 +1,6 @@
 # 瞬息 · 番外小剧场
 
-Moment Theatre — 原生 SillyTavern 扩展，当前版本 **1.2.0**，兼容目标为 **SillyTavern 1.15～1.18**（不支持 1.14）。不依赖酒馆助手。
+Moment Theatre — 原生 SillyTavern 扩展，当前版本 **1.2.1**，兼容目标为 **SillyTavern 1.15～1.18**（不支持 1.14）。不依赖酒馆助手。
 
 ## 1.2 资料保护
 
