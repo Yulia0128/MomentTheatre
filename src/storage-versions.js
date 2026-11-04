@@ -1,7 +1,7 @@
 import {emptyState,normalizeState,id} from './model.js';
-import {packAvatars,unpackAvatars,avatarReferences,avatarHash} from './avatar-assets.js';
-import {encodeRecords,decodeRecords,seal,unseal,canonicalEqual,digest} from './storage-records.js';
-import {writeTransaction,readValue,storeKeys,completeTransaction} from './storage-idb.js';
+import {unpackAvatars,avatarReferences} from './avatar-assets.js';
+import {decodeRecords,seal,unseal,digest} from './storage-records.js';
+import {writeTransaction,readValue,readValues,storeKeys,completeTransaction} from './storage-idb.js';
 
 export const VERSION_STORES=['accounts','avatars','libraryRecords','libraryVersions','libraryCommits'];
 const conflict=()=>Error('另一页面已修改资料或同步期间出现新输入，本次保存失败；原有效版本仍保留。');
@@ -12,18 +12,26 @@ export class LibraryVersions {
   get headKey(){return [this.scope,'v3-head'];}
   health(kind,issues=[]){this.owner.health={kind,writable:kind==='healthy',issues:issues.map(x=>({stage:x.stage||'integrity'}))};try{this.owner.onHealth?.(this.owner.health);}catch{/* UI notification cannot change storage integrity. */}}
   async keys(store){return (await storeKeys(this.db,store)).filter(key=>Array.isArray(key)&&key[0]===this.scope);}
-  async version(token){
+  async recordDigest(node){
+    return JSON.stringify(node)?.length>8192?this.owner.compute.run('digest',node):digest(node);
+  }
+  async version(token,recordKeys=null){
     const manifest=unseal(await readValue(this.db,'libraryVersions',[this.scope,token]));
     if(manifest.version!==1||manifest.token!==token||!Number.isSafeInteger(manifest.revision)||manifest.revision<1)throw Error('资料版本结构无效。');
-    const decoded=await decodeRecords(manifest.root,hash=>readValue(this.db,'libraryRecords',[this.scope,hash]));
+    // The candidate's expected keys are known. Read every actual row back in a
+    // new readonly transaction; never substitute prepared or cached node bytes.
+    const rows=recordKeys?await readValues(this.db,'libraryRecords',[...recordKeys].map(hash=>[hash,[this.scope,hash]])):null;
+    const decoded=await decodeRecords(manifest.root,hash=>rows?rows.get(hash):readValue(this.db,'libraryRecords',[this.scope,hash]),node=>this.recordDigest(node));
     if(!decoded.value?.state)throw Error('资料主信息不可用。');
     const refs=avatarReferences(decoded.value),assets=new Map(),issues=[...decoded.issues];
     for(const hash of refs){
-      try{const url=await readValue(this.db,'avatars',[this.scope,hash]);if(typeof url!=='string'||avatarHash(url)!==hash)throw Error();assets.set(hash,url);}
+      try{assets.set(hash,await readValue(this.db,'avatars',[this.scope,hash]));}
       catch{issues.push({stage:'resource'});}
     }
+    const verifiedHashes=assets.size?await this.owner.compute.run('assets',assets):[],verified=new Set(verifiedHashes);
+    for(const hash of refs)if(!verified.has(hash)){assets.delete(hash);issues.push({stage:'resource'});}
     const complete=decoded.complete&&issues.length===0;
-    const value=unpackAvatars(decoded.value,assets,{allowMissing:!complete});
+    const value=unpackAvatars(decoded.value,assets,{allowMissing:!complete,verifiedHashes});
     const state=normalizeState(value.state);
     return {token,manifest,value,state,nodes:decoded.nodes,refs,assets,complete,issues};
   }
@@ -141,27 +149,24 @@ export class LibraryVersions {
     // Shared nodes were just read back as part of the candidate. Check the old
     // version's remaining nodes too, before retiring any other confirmed root.
     for(const hash of this.current?.nodes||[])if(!candidate.nodes.has(hash)){
-      if(digest(await readValue(this.db,'libraryRecords',[this.scope,hash]))!==hash)throw Error('保留版本记录缺失或校验失败。');
+      if(await this.recordDigest(await readValue(this.db,'libraryRecords',[this.scope,hash]))!==hash)throw Error('保留版本记录缺失或校验失败。');
     }
-    for(const hash of this.current?.refs||[])if(!candidate.refs.has(hash)){
-      const url=await readValue(this.db,'avatars',[this.scope,hash]);if(typeof url!=='string'||avatarHash(url)!==hash)throw Error('保留版本资源缺失或校验失败。');
-    }
+    const assets=new Map();
+    for(const hash of this.current?.refs||[])if(!candidate.refs.has(hash))assets.set(hash,await readValue(this.db,'avatars',[this.scope,hash]));
+    if(assets.size&&(await this.owner.compute.run('assets',assets)).length!==assets.size)throw Error('保留版本资源缺失或校验失败。');
   }
   async commit(state,options){
     this.guard(options);const o=this.owner;
     const recovery=options.recoveryValue!==undefined?options.recoveryValue:options.recovery?this.current?.value.state||null:this.current?.value.recovery||null;
-    const token=id(),input={state,syncMeta:options.syncMeta||null,recovery},packed=packAvatars(input,{knownUrls:o.knownImages}),encoded=encodeRecords(packed.data,{indexNonce:token});
-    let size=0;const bytes=value=>new TextEncoder().encode(value).length;
-    for(const node of encoded.nodes.values())size+=bytes(JSON.stringify(node));
-    for(const url of packed.assets.values())size+=bytes(url);
-    if(size>512*1024*1024)throw Error('本机候选资料超过 512 MB，已停止保存，原有效版本仍保留。');
+    const token=id(),input={state,syncMeta:options.syncMeta||null,recovery};
+    const {encoded,assets,size}=await o.compute.run('prepare',{input,token,knownImages:o.knownImages});
     o.lastCommitStats={candidateBytes:size,retainedVersions:this.current?2:1};
     const manifest={version:1,token,revision:o.revision+1,writer:o.writer,sequence:options.sequence,root:encoded.root};
     let staged=false;
     try{
-      await this.stage(manifest,encoded,packed.assets,options);staged=true;
-      const candidate=await this.version(manifest.token);
-      if(!candidate.complete||!canonicalEqual(candidate.value,input))throw Error('保存回读校验失败，原有效版本仍保留。');
+      await this.stage(manifest,encoded,assets,options);staged=true;
+      const candidate=await this.version(manifest.token,encoded.nodes.keys());
+      if(!candidate.complete||!await o.compute.run('equal',{a:candidate.value,b:input}))throw Error('保存回读校验失败，原有效版本仍保留。');
       await this.verifyRetained(candidate);
       await this.confirm(candidate,options);
       this.previous=this.current;this.current=candidate;o.revision=manifest.revision;o.syncMeta=options.syncMeta||null;o.persistedSequence=options.sequence;

@@ -1,12 +1,14 @@
 import { normalizeState, clone, id } from './model.js';
 import { packAvatars, unpackAvatars, avatarReferences } from './avatar-assets.js';
 import {LibraryVersions,VERSION_STORES} from './storage-versions.js';
+import {StorageCompute} from './storage-compute.js';
 
 export class LibraryStore {
   constructor(scope, indexedDBFactory = globalThis.indexedDB, journalStorage = null) {
     this.knownAssets = new Set(); this.knownImages = new Map(); this.scope = scope; this.factory = indexedDBFactory; this.revision = 0; this.queue = Promise.resolve();
     this.writer = id(); this.sequence = 0; this.persistedSequence = 0; this.syncEpoch = 0; this.activeSync = null; this.journalKey = `shunxi:${scope}:pending-input`;
     this.health={kind:'loading',writable:false,issues:[]};
+    this.compute=new StorageCompute();
     try { this.journal = journalStorage || globalThis.localStorage; } catch { this.journal = null; }
   }
   checkpoint(state) {
@@ -94,5 +96,5 @@ export class LibraryStore {
     const stages={};for(const item of this.health.issues||[])stages[item.stage]=(stages[item.stage]||0)+1;
     return {format:'momenttheatre-storage-diagnostic',version:1,databaseVersion:this.db?.version||0,health:this.health.kind,revision:this.revision,stages,durability:this.durability||'unknown'};
   }
-  async close() { this.cancelOpen?.(); this.cancelOpen = null; await this.queue; this.db?.close(); }
+  async close() { this.cancelOpen?.(); this.cancelOpen = null; await this.queue; this.compute.close(); this.db?.close(); }
 }

@@ -39,8 +39,8 @@ export function avatarReferences(value) {
   });
   return refs;
 }
-export function unpackAvatars(value, assets, { allowMissing = false } = {}) {
-  const verified = new Set();
+export function unpackAvatars(value, assets, { allowMissing = false, verifiedHashes = [] } = {}) {
+  const verified = new Set(verifiedHashes);
   return visit(value, item => {
     if (!item || typeof item !== 'object') return item;
     const url = assets.get(item.avatar);

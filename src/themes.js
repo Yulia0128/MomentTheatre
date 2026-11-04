@@ -8,6 +8,9 @@ export function resolveLegacyTheme(state, mode, themeId) {
   return state.themes.find(t => t.id === themeId && t.mode === mode) || LEGACY_THEMES.find(t => t.id === themeId && t.mode === mode) || resolveTheme(state, mode, themeId);
 }
 const tokenKeys = new Set(['background', 'color', 'fontFamily', 'fontSize', 'lineHeight', 'bubble', 'ownBubble']);
+// Cache successful CSS validation only, keyed by exact input, with a fixed bound.
+// Returned chapter snapshots and their tokens always remain independent objects.
+const verifiedCss = new Set();
 export function validateTheme(raw, { allowBuiltInId = false } = {}) {
   if (!raw || !['prose', 'phone'].includes(raw.mode) || typeof raw.name !== 'string' || !raw.name.trim()) throw new Error('主题需要 name、mode（prose 或 phone）和 tokens。');
   if (!raw.tokens || typeof raw.tokens !== 'object' || Array.isArray(raw.tokens)) throw new Error('主题 tokens 必须是对象。');
@@ -18,7 +21,11 @@ export function validateTheme(raw, { allowBuiltInId = false } = {}) {
     tokens[key] = value;
   }
   const css = raw.css ?? '';
-  compileThemeCss(css, tokens.fontFamily);
+  const cssKey = typeof css === 'string' && css.length <= 30000 ? JSON.stringify([css, tokens.fontFamily]) : null;
+  if (!cssKey || !verifiedCss.has(cssKey)) {
+    compileThemeCss(css, tokens.fontFamily);
+    if (cssKey) { if (verifiedCss.size >= 16) verifiedCss.delete(verifiedCss.values().next().value); verifiedCss.add(cssKey); }
+  }
   return { id: typeof raw.id === 'string' && (/^custom-[a-z0-9-]{1,80}$/.test(raw.id) || allowBuiltInId && [...BUILTIN_THEMES, ...LEGACY_THEMES].some(t => t.id === raw.id && t.mode === raw.mode)) ? raw.id : `custom-${createId()}`,
     name: raw.name.trim().slice(0, 60), mode: raw.mode, tokens, css };
 }

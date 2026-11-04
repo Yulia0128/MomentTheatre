@@ -72,6 +72,12 @@ button:hover{background:transparent}.primary:hover{background:var(--ink);opacity
 .source-popup>.popup-heading{flex-shrink:0}
 .source-popup>.source-detail{min-height:0;overflow:auto;overscroll-behavior:contain}
 .source-popup>.actions:empty{display:none}
+.popup-heading:has(.source-save)>h2,.source-menu-heading>span{flex:1;min-width:0}
+.source-save{white-space:nowrap;flex-shrink:0}
+.source-menu-heading{display:flex;align-items:center;gap:12px;position:sticky;top:-5px;z-index:1;background:var(--paper);border-bottom:1px solid var(--line);padding:3px 7px;font-size:12px}
+.source-menu-heading .icon-button{width:30px;height:34px;padding:4px}
+.source-save-status{font-size:12px;overflow-wrap:anywhere;color:var(--ink);flex-shrink:0}
+.source-save-status[hidden]{display:none}
 
 /* 1.0.15: visible header content and hit targets share the same safe-area layout.
    Keep the inset on the header itself, not padding on the top-layer dialog. */

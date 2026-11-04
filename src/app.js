@@ -100,6 +100,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   });
   let sync = null, autoSync = null;
   let saveTimer, noticeTimer, imageCommit = null, unread = false, disposed = false, busyAction = false;
+  let backgroundSave = null, saveAgain = false;
   let generationError = null, nativePanel = null, wandEntry = null, refreshRegexOptions = () => {}, catalogRequest = 0;
   const finishedSound = completionSound();
   const readingWarnings = new Set(), readerTokens = new WeakMap();
@@ -137,10 +138,11 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   shadow.append(el('slot', { name: 'launcher' }), dialog); root.append(launcher); document.body.append(root);
   const openDropdowns = new Set();
   function setDropdownOpen(menu, open) {
+    if (!open && menu.sourceSaving) return;
     menu.dataset.open = String(open);
     menu.querySelector('.dropdown-trigger').setAttribute('aria-expanded', String(open));
     menu.querySelector('.dropdown-panel').hidden = !open;
-    if (open) openDropdowns.add(menu); else openDropdowns.delete(menu);
+    if (open) openDropdowns.add(menu); else { openDropdowns.delete(menu); menu.onSourceClose?.(); }
   }
   // Close on an actual outside interaction, never during a label's focus transfer.
   // Hiding a native details/label while its click is being forwarded can hang Chromium.
@@ -204,15 +206,19 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if(store.health.writable)Promise.resolve(imageCommit).catch(() => {}).then(() => store.save(state)).catch(() => {});
     const list = shadow.querySelector('.error-list'); if (list) list.replaceChildren(...errorRows());
   }
-  async function persist() {
+  async function persist(overrides = null) {
     if (!ready) return;
     if(!store.health.writable)throw new Error('资料正在保护性只读，未保存或同步。');
-    if (imageCommit) await imageCommit;
-    clearTimeout(saveTimer); saveTimer = null; store.checkpoint(state);
-    const retained = limitDraftStories(state);
+    while (imageCommit) await imageCommit;
+    clearTimeout(saveTimer); saveTimer = null; saveAgain = false; store.checkpoint(state);
+    const retained = limitDraftStories(overrides ? { ...state, ...overrides } : state);
     const keep = new Set(retained.stories.map(story => story.id));
     const removed = new Set(state.stories.filter(story => !keep.has(story.id)).map(story => story.id));
-    await store.save(retained);
+    const saving = store.save(retained);
+    if (overrides) {
+      imageCommit = saving.then(() => { Object.assign(state, overrides); });
+      try { await imageCommit; } finally { imageCommit = null; }
+    } else await saving;
     // Pruning becomes visible only once the replacement is committed.
     if (retained !== state) {
       state.stories = state.stories.filter(story => !removed.has(story.id));
@@ -222,7 +228,15 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (!ready || disposed || !store.health.writable) return;
     autoSync?.changed();
     try { if (!imageCommit) store.checkpoint(state); } catch (error) { report(error, '保存'); }
-    clearTimeout(saveTimer); saveTimer = setTimeout(() => persist().catch(report), 250);
+    clearTimeout(saveTimer); saveTimer = setTimeout(() => saveWhenIdle().catch(report), 1000);
+  }
+  async function saveWhenIdle() {
+    if (backgroundSave) { saveAgain = true; return; }
+    backgroundSave = (async () => {
+      do { saveAgain = false; await persist(); }
+      while (saveAgain && !disposed && store.health.writable);
+    })();
+    try { await backgroundSave; } finally { backgroundSave = null; }
   }
   function setLauncherEnabled(value) { if (!ready) { nativePanel?.sync(!launcher.hidden, true); return; } state.settings.launcherEnabled = value; launcher.hidden = !value; nativePanel?.sync(value); scheduleSave(); }
   async function action(fn) { if (busyAction||store?.health.writable===false) return; busyAction = true; try { await fn(); } catch (e) { report(e); } finally { busyAction = false; } }
@@ -364,7 +378,11 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         const titleInput = el('input', { value: state.editorDraft?.title ?? story.title, maxlength: 120, onInput: e => { state.editorDraft.title = e.target.value; scheduleSave(); } });
         const editor = el('textarea', { rows: 14, value: editText, onInput: e => { editText = e.target.value; state.editorDraft.content = editText; scheduleSave(); } });
         const complete = el('input', { type: 'checkbox', checked: state.editorDraft?.complete ?? story.chapters[chapterIndex].complete, onChange: e => { state.editorDraft.complete = e.target.checked; scheduleSave(); } });
-        page.append(phoneChapter ? null : label('标题', titleInput), label(story.mode === 'html' ? 'HTML 源代码' : (story.chapters[chapterIndex].mode || story.mode) === 'phone' ? '小手机消息' : '章节内容', editor, phoneChapter ? '每行一条，如 [char|23:48|你好]；特殊消息保留类型与对应字段。' : ''), el('label', { class: 'check-row' }, complete, story.mode === 'html' ? '页面代码完整' : '这一节已完成'), el('div', { class: 'actions' }, button('保存编辑', () => action(async () => {
+        const cancelEdit = button('取消', () => { editing = false; state.editorDraft = null; scheduleSave(); render(); });
+        const saveEdit = button('保存编辑', () => action(async () => {
+          for (const control of [titleInput, editor, complete, saveEdit, cancelEdit]) control.disabled = true;
+          saveEdit.textContent = '保存中…';
+          try {
           if (!editText.trim()) throw new Error('章节内容不能为空。');
           if (story.mode === 'html') { await captureLegacyHtmlFilters(story); if (complete.checked && htmlIssue(editText)) throw new Error(htmlIssue(editText)); story.chapters[chapterIndex].sourceContent=editText; }
           const phoneEdit = phoneChapter ? savePhoneEdit(story.chapters[chapterIndex], editText, state.settings.stickers, { character: story.snapshot?.character?.name, persona: story.snapshot?.persona?.name }) : null;
@@ -373,8 +391,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
           if (!phoneChapter) story.title = titleInput.value.trim() || story.title; story.chapters[chapterIndex].content = story.mode==='html' ? cleanHtml(editText)||editText : editText; story.chapters[chapterIndex].complete = complete.checked;
           story.chapters[chapterIndex][(story.chapters[chapterIndex].mode || story.mode) === 'phone' ? 'messageCount' : 'wordCount'] = size;
           invalidateSummaries(story, chapterIndex);
-          story.updatedAt = Date.now(); state.editorDraft = null; await persist(); editing = false; render(); notify(story.mode === 'html' ? 'HTML 编辑已保存。' : '编辑已保存，后续续写会使用修改后的内容。');
-        }), { class: 'primary' }), button('取消', () => { editing = false; state.editorDraft = null; scheduleSave(); render(); })));
+          story.updatedAt = Date.now(); await persist({ editorDraft: null }); editing = false; render(); notify(story.mode === 'html' ? 'HTML 编辑已保存。' : '编辑已保存，后续续写会使用修改后的内容。');
+          } finally {
+            for (const control of [titleInput, editor, complete, saveEdit, cancelEdit]) control.disabled = false;
+            saveEdit.textContent = '保存编辑'; if (!store.health.writable) applyReadOnly();
+          }
+        }), { class: 'primary' });
+        page.append(phoneChapter ? null : label('标题', titleInput), label(story.mode === 'html' ? 'HTML 源代码' : (story.chapters[chapterIndex].mode || story.mode) === 'phone' ? '小手机消息' : '章节内容', editor, phoneChapter ? '每行一条，如 [char|23:48|你好]；特殊消息保留类型与对应字段。' : ''), el('label', { class: 'check-row' }, complete, story.mode === 'html' ? '页面代码完整' : '这一节已完成'), el('div', { class: 'actions' }, saveEdit, cancelEdit));
       } else {
         const collapse = button('', () => fullscreen.exit(), { class: 'reading-toggle reader-collapse', 'aria-label': '退出全屏阅读', title: '退出全屏阅读' });
         collapse.innerHTML = readingIcon(true);
@@ -877,14 +900,49 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function errorRows() {
     return state.errors.length ? state.errors.map(e => el('article', { class: 'error-row' }, el('small', {}, `${new Date(e.time).toLocaleString()} · ${e.stage}`), el('strong', {}, e.code), el('p', {}, e.message))) : [el('p', { class: 'muted' }, '暂无报错')];
   }
-  function entryRows(kind, name, entries) {
-    const mapKey = kind === 'preset' ? 'presetOverrides' : 'bookOverrides';
+  async function saveSourcePatch(patch) {
+    if (!store.health.writable) throw new Error('资料正在保护性只读，不能保存。');
+    while (imageCommit) await imageCommit;
+    const pending = Boolean(saveTimer), savedPatch = clone(patch);
+    clearTimeout(saveTimer); saveTimer = null;
+    // Keep unconfirmed edits out of state, journals, background saves and sync.
+    imageCommit = store.save({ ...state, settings: { ...state.settings, ...savedPatch } })
+      .then(() => { Object.assign(state.settings, savedPatch); });
+    try { await imageCommit; try { autoSync?.changed(); autoSync?.saved(); } catch { /* The settings are already confirmed. */ } }
+    catch (error) { if (pending && store.health.writable) scheduleSave(); throw error; }
+    finally { imageCommit = null; }
+  }
+  function sourceSaveControls(heading, body, close, changed, patch, done = close) {
+    const feedback = el('p', { class: 'source-save-status', role: 'status', hidden: true });
+    const menu = heading.closest('.source-dropdown');
+    let saving = false;
+    const save = button('保存', () => action(async () => {
+      if (!changed()) { done(); return; }
+      saving = true; if (menu) menu.sourceSaving = true;
+      save.disabled = closeButton.disabled = true; body.inert = true;
+      save.textContent = '保存中…'; feedback.hidden = true;
+      try { await saveSourcePatch(patch()); if (menu) menu.sourceSaving = false; done(); }
+      catch (error) { feedback.hidden = false; feedback.textContent = errorRecord(error, '保存设置', host.getKey()).message; }
+      finally { saving = false; if (menu) menu.sourceSaving = false; body.inert = false; save.textContent = '保存'; save.disabled = !store.health.writable; closeButton.disabled = false; }
+    }), { class: 'text-button source-save' });
+    const closeButton = heading.querySelector('button[aria-label="关闭"]');
+    closeButton.before(save); body.before(feedback);
+    const pop = heading.closest('dialog.popup');
+    pop?.addEventListener('cancel', e => { if (saving) e.preventDefault(); });
+    if (!store.health.writable) applyReadOnly();
+  }
+  function sourceMenuControls(menu, panel, body, changed, patch, done = () => setDropdownOpen(menu, false)) {
+    const heading = el('div', { class: 'source-menu-heading' }, el('span', {}, '修改后请保存'),
+      button('×', () => setDropdownOpen(menu, false), { class: 'icon-button', 'aria-label': '关闭' }));
+    panel.replaceChildren(heading, body);
+    sourceSaveControls(heading, body, () => setDropdownOpen(menu, false), changed, patch, done);
+  }
+  function entryRows(entries, overrides) {
     const set = (id, patch) => {
-      const maps = state.settings[mapKey];
-      maps[name] = { ...(maps[name] || {}), [id]: { ...(maps[name]?.[id] || {}), ...patch } }; scheduleSave();
+      overrides[id] = { ...overrides[id], ...patch };
     };
     return entries.map(entry => {
-      const change = state.settings[mapKey]?.[name]?.[entry.id] || {};
+      const change = overrides[entry.id] || {};
       const checkbox = el('input', { type: 'checkbox', checked: change.enabled ?? entry.enabled, 'aria-label': `启用${entry.name}`, onClick: e => e.stopPropagation(), onChange: e => set(entry.id, { enabled: e.target.checked }) });
       return el('details', { class: 'source-entry' }, el('summary', {}, checkbox, el('span', {}, entry.name)),
         entry.marker ? el('p', { class: 'muted' }, '酒馆资料占位项') : label(`${entry.name}内容`, el('textarea', { rows: 4, value: change.content ?? entry.content, onInput: e => set(entry.id, { content: e.target.value }) })));
@@ -898,46 +956,60 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       try {
         const details = [kind === 'preset' ? await host.presetDetail(name) : await host.bookDetail(name)];
         if (!pop.isConnected) return;
+        const mapKey = kind === 'preset' ? 'presetOverrides' : 'bookOverrides';
+        const drafts = Object.fromEntries(details.map(detail => [detail.name, clone(state.settings[mapKey][detail.name] || {})]));
+        const original = JSON.stringify(drafts);
         const choices = [];
         const syncAll = () => { selectAll.textContent = choices.length && choices.every(choice => choice.input.checked) ? '全选取消' : '全选'; };
         const selectAll = button('全选', () => {
           const enabled = !choices.every(choice => choice.input.checked);
-          const maps = state.settings[kind === 'preset' ? 'presetOverrides' : 'bookOverrides'];
           choices.forEach(choice => {
             choice.input.checked = enabled;
-            maps[choice.name] ||= {};
-            maps[choice.name][choice.id] = { ...maps[choice.name][choice.id], enabled };
+            drafts[choice.name][choice.id] = { ...drafts[choice.name][choice.id], enabled };
           });
-          syncAll(); scheduleSave();
+          syncAll();
         }, { class: 'text-button' });
         const sections = details.map(detail => {
           const entries = kind === 'preset' ? detail.prompts : detail.entries;
           const title = kind === 'book' ? catalog.books.find(b => b.value === detail.name)?.label || detail.name : detail.name;
-          const rows = entryRows(kind, detail.name, entries);
+          const rows = entryRows(entries, drafts[detail.name]);
           rows.forEach((row, i) => choices.push({ name: detail.name, id: entries[i].id, input: row.querySelector('input[type=checkbox]') }));
           return el('section', {}, el('h3', {}, title), entries.length ? rows : el('p', { class: 'muted' }, '暂无条目'));
         });
         selectAll.disabled = choices.length === 0;
         choices.forEach(choice => choice.input.addEventListener('change', syncAll)); syncAll();
-        body.replaceChildren(el('div', { class: 'source-detail-toolbar' }, el('p', { class: 'muted' }, '勾选和文本修改只用于番外，自动保存。'), selectAll), ...sections);
+        body.replaceChildren(el('div', { class: 'source-detail-toolbar' }, el('p', { class: 'muted' }, '修改后请点右上角保存，关闭不保存。'), selectAll), ...sections);
+        sourceSaveControls(pop.querySelector('.popup-heading'), body, () => pop.close(), () => JSON.stringify(drafts) !== original,
+          () => ({ [mapKey]: { ...state.settings[mapKey], ...drafts } }));
       } catch (error) { body.replaceChildren(el('p', {}, '条目读取失败，详情已记录在报错记录。')); report(error, kind === 'preset' ? '读取预设' : '读取世界书'); }
     }), { class: 'source-arrow icon-button', 'aria-label': `查看${kind === 'preset' ? '预设' : '世界书'}：${title}` });
     control.innerHTML = phoneIcon('arrow'); return control;
   }
   function sourceSelector(kind) {
-    const s = state.settings, isBook = kind === 'book', title = isBook ? '世界书' : '预设';
+    const isBook = kind === 'book', title = isBook ? '世界书' : '预设', field = isBook ? 'books' : 'preset';
     const options = isBook ? catalog.books : [{ value: '', label: '使用当前已保存预设' }, { value: '__none__', label: '不采用预设' }, ...catalog.presets];
-    const selectedNames = () => isBook ? s.books.map(v => catalog.books.find(b => b.value === v)?.label || v).join('、') || '选择世界书（可多选）' : options.find(o => o.value === s.preset)?.label || s.preset;
+    let draft = clone(state.settings[field]);
+    const selectedNames = () => isBook ? draft.map(v => catalog.books.find(b => b.value === v)?.label || v).join('、') || '选择世界书（可多选）' : options.find(o => o.value === draft)?.label || draft;
     const { menu, caption, panel } = dropdown(`${title}（${isBook ? '多选' : '单选'}）`, selectedNames());
     panel.setAttribute('aria-label', `${title}选项`);
-    panel.append(...(options.length ? options.map(option => {
-      const input = el('input', { type: isBook ? 'checkbox' : 'radio', name: isBook ? null : 'shunxi-preset-choice', value: option.value, checked: isBook ? s.books.includes(option.value) : s.preset === option.value, 'aria-label': `${isBook ? '使用世界书' : '使用预设'}${option.label}`, onChange: e => {
-        if (isBook) s.books = e.target.checked ? [...new Set([...s.books, option.value])] : s.books.filter(v => v !== option.value);
-        else { s.preset = option.value; refreshRegexOptions(); }
-        caption.textContent = selectedNames(); caption.title = caption.textContent; scheduleSave();
-      } });
-      return choiceRow(input, option.label, option.value === '__none__' ? null : sourceArrow(kind, option.value, option.label));
-    }) : [el('p', { class: 'muted' }, `当前酒馆没有${title}。`)]));
+    const paint = () => {
+      const characterKey = state.settings.bookCharacter;
+      draft = clone(state.settings[field]); caption.textContent = selectedNames(); caption.title = caption.textContent;
+      const body = el('div', {}, options.length ? options.map(option => {
+        const input = el('input', { type: isBook ? 'checkbox' : 'radio', name: isBook ? null : 'shunxi-preset-choice', value: option.value, checked: isBook ? draft.includes(option.value) : draft === option.value, 'aria-label': `${isBook ? '使用世界书' : '使用预设'}${option.label}`, onChange: e => {
+          draft = isBook ? e.target.checked ? [...new Set([...draft, option.value])] : draft.filter(v => v !== option.value) : option.value;
+        } });
+        return choiceRow(input, option.label, option.value === '__none__' ? null : sourceArrow(kind, option.value, option.label));
+      }) : el('p', { class: 'muted' }, `当前酒馆没有${title}。`));
+      sourceMenuControls(menu, panel, body, () => JSON.stringify(draft) !== JSON.stringify(state.settings[field]), () => {
+        if (isBook && characterKey !== state.settings.bookCharacter) throw new Error('角色已切换，请关闭列表后重新选择世界书。');
+        const patch = { [field]: draft }, key = state.settings.bookCharacter;
+        if (isBook && key) patch.characterBooks = { ...state.settings.characterBooks,
+          [key]: { ...state.settings.characterBooks[key], selected: [...draft] } };
+        return patch;
+      }, () => { setDropdownOpen(menu, false); if (!isBook) refreshRegexOptions(); });
+    };
+    menu.onSourceClose = paint; paint();
     return sourceRow(title, menu);
   }
   function regexSelector(kind = 'preset') {
@@ -946,30 +1018,36 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     const row = sourceRow(title, menu); row.classList.add('regex-source-row');
     let request = 0;
     const paint = detail => {
-      const settings = state.settings, key = detail.key || detail.name;
-      const config = () => Object.hasOwn(settings[field], key) ? settings[field][key] : { selected: defaultRegexSelection(detail.rules), edits: {} };
-      const ensure = () => { if (!Object.hasOwn(settings[field], key)) settings[field] = { ...settings[field], [key]:config() }; return settings[field][key]; };
-      const name = rule => config().edits[rule.id]?.scriptName || rule.scriptName;
-      const updateCaption = () => { caption.textContent = detail.rules.filter(rule => config().selected.includes(rule.id)).map(name).join('、') || (detail.rules.length ? '选择正则（可多选）' : `此${character ? '角色' : '预设'}暂无正则`); caption.title = caption.textContent; };
+      const key = detail.key || detail.name;
+      const read = () => clone(state.settings[field][key] || { selected: defaultRegexSelection(detail.rules), edits: {} });
+      const draft = read(), original = JSON.stringify(draft);
+      const patch = value => ({ [field]: { ...state.settings[field], [key]: value } });
+      const name = rule => draft.edits[rule.id]?.scriptName || rule.scriptName;
+      const updateCaption = () => { caption.textContent = detail.rules.filter(rule => draft.selected.includes(rule.id)).map(name).join('、') || (detail.rules.length ? '选择正则（可多选）' : `此${character ? '角色' : '预设'}暂无正则`); caption.title = caption.textContent; };
       updateCaption();
-      panel.replaceChildren(...(detail.rules.length ? detail.rules.map(rule => {
-        const check = el('input', { type:'checkbox', checked:config().selected.includes(rule.id), 'aria-label':'使用正则' + name(rule), onChange:e => {
-          const value = ensure(); value.selected = e.target.checked ? [...new Set([...value.selected, rule.id])] : value.selected.filter(id => id !== rule.id); updateCaption(); scheduleSave();
+      const body = el('div', {}, detail.rules.length ? detail.rules.map(rule => {
+        const check = el('input', { type:'checkbox', checked:draft.selected.includes(rule.id), 'aria-label':'使用正则' + name(rule), onChange:e => {
+          draft.selected = e.target.checked ? [...new Set([...draft.selected, rule.id])] : draft.selected.filter(id => id !== rule.id);
         } });
         const arrow = button('', () => {
+          const value = clone(draft), ruleDraft = { ...rule, ...value.edits[rule.id] };
           setDropdownOpen(menu, false);
-          const value = ensure(), draft = { ...rule, ...value.edits[rule.id] };
-          const field = (title, key, rows) => label(title, el(rows ? 'textarea' : 'input', { value: key === 'trimStrings' ? draft[key].join('\n') : draft[key], rows, onInput:e => {
-            draft[key] = key === 'trimStrings' ? e.target.value.split('\n').filter(Boolean) : e.target.value; value.edits = { ...value.edits, [rule.id]:{ ...draft } }; scheduleSave();
+          const controlField = (title, key, rows) => label(title, el(rows ? 'textarea' : 'input', { value: key === 'trimStrings' ? ruleDraft[key].join('\n') : ruleDraft[key], rows, onInput:e => {
+            ruleDraft[key] = key === 'trimStrings' ? e.target.value.split('\n').filter(Boolean) : e.target.value;
+            value.edits = { ...value.edits, [rule.id]:{ ...ruleDraft } };
           } }));
           const scopes = rule.placement.map(n => ({ 1:'用户输入', 2:'AI 回复', 3:'快捷命令', 5:'世界书', 6:'思考内容' }[n] || String(n))).join('、');
-          const pop = popup(title + '详情', el('div', {}, field('正则名称','scriptName'), field('表达式','findRegex',4), field('替换式','replaceString',7), field('裁剪内容（每行一项）','trimStrings',3),
-            el('p',{class:'muted'},field === 'regexCharacters' ? '仅用于瞬息正文显示，编辑原文和酒馆源规则保持不变；修改自动保存。' : '用于正文显示；HTML 仅使用替换为空的过滤规则。编辑原文和酒馆源规则保持不变；修改自动保存。'),
-            el('p',{class:'muted'},`来源原设置：${rule.disabled ? '已禁用' : '已启用'}；${scopes || '未指定范围'}；${rule.markdownOnly ? '仅显示' : rule.promptOnly ? '仅提示词' : '通用'}；深度 ${rule.minDepth ?? '不限'}—${rule.maxDepth ?? '不限'}；编辑时运行：${rule.runOnEdit ? '是' : '否'}；表达式宏：${['不替换','替换','转义后替换'][rule.substituteRegex]}。`)));
+          const detailBody = el('div', { class: 'source-detail' }, controlField('正则名称','scriptName'), controlField('表达式','findRegex',4), controlField('替换式','replaceString',7), controlField('裁剪内容（每行一项）','trimStrings',3),
+            el('p',{class:'muted'},'修改后请点右上角保存，关闭不保存。'),
+            el('p',{class:'muted'},`来源原设置：${rule.disabled ? '已禁用' : '已启用'}；${scopes || '未指定范围'}；${rule.markdownOnly ? '仅显示' : rule.promptOnly ? '仅提示词' : '通用'}；深度 ${rule.minDepth ?? '不限'}—${rule.maxDepth ?? '不限'}；编辑时运行：${rule.runOnEdit ? '是' : '否'}；表达式宏：${['不替换','替换','转义后替换'][rule.substituteRegex]}。`));
+          const pop = popup(title + '详情', detailBody, [], 'source-popup');
+          sourceSaveControls(pop.querySelector('.popup-heading'), detailBody, () => pop.close(), () => JSON.stringify(value) !== original, () => patch(value));
           pop.addEventListener('close', () => paint(detail), { once:true });
         }, { class:'source-arrow icon-button', 'aria-label':'查看正则：' + name(rule) });
         arrow.innerHTML = phoneIcon('arrow'); return choiceRow(check, name(rule), arrow);
-      }) : [el('p', {class:'muted'}, `此${character ? '角色' : '预设'}暂无正则。`)]));
+      }) : el('p', {class:'muted'}, `此${character ? '角色' : '预设'}暂无正则。`));
+      sourceMenuControls(menu, panel, body, () => JSON.stringify(draft) !== original, () => patch(draft));
+      menu.onSourceClose = () => paint(detail);
     };
     const refresh = async () => {
       const currentRequest = ++request, preset = state.settings.preset;
@@ -1231,7 +1309,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.1：优化打开和收起窗口的卡顿。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.2：条目手动保存，优化编辑与保存卡顿。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -1260,7 +1338,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   });
   launcherObserver.observe(root, { childList: true });
   const flushInputs = () => { if (!ready || disposed || imageCommit || !store.health.writable) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
-  const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { autoSync?.pause(); flushInputs(); if(store?.health.writable)persist().catch(report); } else autoSync?.wake(); };
+  const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { autoSync?.pause(); flushInputs(); if(store?.health.writable)saveWhenIdle().catch(report); } else autoSync?.wake(); };
   const onOnline = () => autoSync?.wake();
   const onOffline = () => { autoSync?.pause(); if(state?.settings.autoSync)autoSync?.status('网络已断开 · 有修改尚未同步时，将在联网并空闲后重试。'); };
   const beforeUnload = e => { flushInputs(); if (task || editing) { e.preventDefault(); e.returnValue = ''; } };

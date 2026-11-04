@@ -24,6 +24,13 @@ export function storeKeys(db,store){
     tx.onerror=tx.onabort=()=>reject(Error('资料索引读取失败。'));
   });
 }
+export function readValues(db,store,keys){
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store),rows=new Map(),table=tx.objectStore(store);
+    for(const [id,key] of keys){const request=table.get(key);request.onsuccess=()=>rows.set(id,request.result);}
+    tx.oncomplete=()=>resolve(rows);tx.onerror=tx.onabort=()=>reject(Error('资料记录读取失败。'));
+  });
+}
 export function completeTransaction(tx){
   return new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(Error('保存失败，原有效版本仍保留。'));});
 }

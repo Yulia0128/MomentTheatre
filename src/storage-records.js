@@ -46,14 +46,14 @@ export function encodeRecords(input,{indexNonce=''}={}){
   };
   return {root:encode(input),nodes};
 }
-export async function decodeRecords(root,read){
+export async function decodeRecords(root,read,hashNode=digest){
   const cache=new Map(),nodes=new Set(),issues=[];
   const decode=async(hash,depth=0,chain=new Set())=>{
     if(depth>80||!hashPattern.test(hash)||chain.has(hash))return {complete:false};
     if(cache.has(hash))return cache.get(hash);
     const work=(async()=>{
       nodes.add(hash);let node;
-      try{node=await read(hash);if(digest(node)!==hash)throw Error();}
+      try{node=await read(hash);if(await hashNode(node)!==hash)throw Error();}
       catch{issues.push({stage:'record',hash});return {complete:false};}
       const next=new Set(chain);next.add(hash);
       if(node.kind==='value')return {value:node.value,complete:true};
