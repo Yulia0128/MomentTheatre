@@ -2,7 +2,7 @@ import {emptyState,normalizeState,clone,id} from './model.js';
 import {canonical,sha256} from './sync-integrity.js';
 import {limitDraftStories} from './draft-retention.js';
 
-export const LOCAL_SETTINGS = ['launcher','launcherEnabled','character','persona','books','bookCharacter','stickerDraft','stickerBatchDraft'];
+export const LOCAL_SETTINGS = ['launcher','launcherEnabled','character','persona','books','bookCharacter','stickerDraft','stickerBatchDraft','autoSync'];
 export const equalSync = (a,b) => canonical(a) === canonical(b);
 export function sharedState(state) {
   const clean = normalizeState(state);
@@ -106,45 +106,57 @@ export function mergeShared(base,local,remote) {
 }
 
 export class LibrarySync {
-  constructor({store,remote,getState,prepare=async()=>{},canApply=()=>true,apply,onStatus=()=>{},onError=()=>{}}) {
-    Object.assign(this,{store,remote,getState,prepare,canApply,apply,onStatus,onError});this.disposed=false;this.running=null;
+  constructor({store,remote,getState,prepare=async()=>{},canApply=()=>true,canApplyShared=()=>true,apply,onStatus=()=>{},onError=()=>{}}) {
+    Object.assign(this,{store,remote,getState,prepare,canApply,canApplyShared,apply,onStatus,onError});this.disposed=false;this.running=null;
     this.status={kind:'idle',text:'由你手动上传或下载，同步前会保留一份本机备份。'};
   }
-  setStatus(kind,text){this.status={kind,text};this.onStatus(this.status);}
-  run(direction){
+  setStatus(kind,text){this.status={kind,text,automatic:this.automatic===true};this.onStatus(this.status);}
+  run(direction,{automatic=false,allowed=()=>true}={}){
     if(this.disposed||this.running)return this.running;
-    this.running=this.perform(direction).finally(()=>{this.running=null;this.onStatus(this.status);});return this.running;
+    this.automatic=automatic;
+    this.running=this.perform(direction,{automatic,allowed}).finally(()=>{this.running=null;this.onStatus(this.status);});return this.running;
   }
-  async perform(direction){
+  async perform(direction,{automatic,allowed}){
+    const permitted=()=>!this.disposed&&this.store.health?.writable!==false&&this.canApply()&&(!automatic||allowed());
     try{
       if(!['upload','download'].includes(direction))throw new Error('请选择上传或下载。');
-      if(!this.canApply())throw new Error('请先结束生成或编辑，再手动同步。');
-      this.setStatus('syncing',direction==='upload'?'正在合并并上传…':'正在下载并合并…');
-      await this.prepare();
+      if(this.store.health?.writable===false){if(automatic)return {deferred:true};throw new Error('资料正在保护性只读，手动同步也已暂停。');}
+      if(!permitted()){if(automatic)return {deferred:true};throw new Error('请先结束生成或编辑，再手动同步。');}
+      this.setStatus('syncing',automatic?'正在自动同步…':direction==='upload'?'正在合并并上传…':'正在下载并合并…');
+      if(automatic)await this.store.queue;else await this.prepare();
       const local=sharedState(this.getState()),guard={expectedRevision:this.store.revision,expectedSequence:this.store.sequence};
-      const record=await this.remote.pull();
-      const check=()=>{if(this.disposed||!this.canApply()||!equalSync(sharedState(this.getState()),local)||guard.expectedRevision!==this.store.revision||guard.expectedSequence!==this.store.sequence)throw new Error('同步期间本机资料发生变化，已停止操作，请重新同步。');};
+      const check=()=>{if(!permitted()||!equalSync(sharedState(this.getState()),local)||guard.expectedRevision!==this.store.revision||guard.expectedSequence!==this.store.sequence)throw new Error('同步期间本机资料发生变化，已停止操作，请重新同步。');};
+      check();
+      const record=await this.remote.pull(automatic?{knownCurrent:this.store.syncMeta?.lastRemote||this.store.syncMeta?.lastUpload,knownState:this.store.syncMeta?.base}:{});
       check();
       if(direction==='download'&&!record.state){this.setStatus('idle','服务器还没有同步资料，请先在有资料的设备上传。');return;}
       const merged=mergeShared(this.store.syncMeta?.base,local,record.state);
       merged.state=limitDraftStories(merged.state);
+      if(automatic&&!this.canApplyShared(merged.state))return {deferred:true};
+      // Polls must not create identical snapshots or repeatedly replace the reader.
+      const needsUpload=direction==='upload'&&(!automatic||!record.state||!equalSync(merged.state,record.state));
       // Commit recovery + merged state atomically BEFORE publishing. Failed persistence
       // cannot publish an incomplete library, nor replace the application's live state.
-      await this.apply(merged.state,{base:record.state},guard);
+      if(!automatic||!equalSync(local,merged.state)||!equalSync(this.store.syncMeta?.base,record.state)||this.store.syncMeta?.lastRemote!==record.current)
+        await this.apply(merged.state,{base:record.state,lastRemote:record.current},guard);
       if(this.disposed)return;
       let result=record;
-      if(direction==='upload'){
+      if(needsUpload){
         const publishedGuard={expectedRevision:this.store.revision,expectedSequence:this.store.sequence};
         // Per-block checks use the revision/input guards. Comparing the entire
         // library for every block would turn large uploads into quadratic work.
-        const stillCurrent=(full=true)=>!this.disposed&&this.canApply()&&publishedGuard.expectedRevision===this.store.revision&&publishedGuard.expectedSequence===this.store.sequence&&(!full||equalSync(sharedState(this.getState()),merged.state));
+        const stillCurrent=(full=true)=>permitted()&&publishedGuard.expectedRevision===this.store.revision&&publishedGuard.expectedSequence===this.store.sequence&&(!full||equalSync(sharedState(this.getState()),merged.state));
         result=await this.remote.push(record,merged.state,stillCurrent);
         if(!stillCurrent())throw new Error('服务器快照已保留，本机随后有新修改，请再次同步。');
-        await this.store.save(this.getState(),{syncMeta:{base:merged.state,lastUpload:result.current},...publishedGuard});
+        await this.store.save(this.getState(),{syncMeta:{base:merged.state,lastUpload:result.current,lastRemote:result.current},...publishedGuard});
       }
-      this.setStatus('done',(direction==='upload'?'已上传到服务器':'已下载并合并')+(merged.conflicts.length?' · 已保留 '+merged.conflicts.length+' 份冲突副本':'')+' · '+new Date().toLocaleTimeString('zh-CN'));
+      if(!permitted())return {deferred:true};
+      this.setStatus('done',(automatic?'已自动同步':direction==='upload'?'已上传到服务器':'已下载并合并')+(merged.conflicts.length?' · 已保留 '+merged.conflicts.length+' 份冲突副本':'')+' · '+new Date().toLocaleTimeString('zh-CN'));
+      return {ok:true};
     }catch(error){
+      if(automatic&&!permitted())return {deferred:true};
       if(!this.disposed){this.setStatus('error',(error.message||'同步失败')+' 本机资料仍保留。');this.onError(error);}
+      return {ok:false};
     }
   }
   dispose(){this.disposed=true;}

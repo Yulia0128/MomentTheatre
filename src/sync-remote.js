@@ -61,8 +61,10 @@ export class ServerLibrary {
     if(String(result?.path||'').replace(/^\//,'')!=='user/files/'+name)fail('服务器返回的文件位置异常，已停止发布。');
   }
   async index(){const result=await this.read(SYNC_INDEX,true);return result===null?null:validateIndex(result);}
-  async pull(){
+  async pull({knownCurrent,knownState}={}){
     const index=await this.index();if(!index)return {index:null,current:null,state:null};
+    // A validated local baseline is reusable only for this exact immutable manifest.
+    if(index.current===knownCurrent&&knownState)return {index,current:index.current,state:validateShared(knownState)};
     const snapshot=await this.read(index.current);
     const state=snapshot?.version===2 ? validateShared(await unpackBundle(snapshot,'sync',hash=>this.read(partName(hash)))) : unpackSnapshot(snapshot);
     return {index,current:index.current,state};

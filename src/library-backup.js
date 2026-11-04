@@ -3,7 +3,8 @@ import { makeZip, crc32 } from './archive.js';
 import { packBundle, unpackBundle, BUNDLE_LIMIT, partName } from './data-bundle.js';
 import { canonical } from './sync-integrity.js';
 
-export function libraryBackup(state) {
+export function libraryBackup(state,health=null) {
+  if(health?.writable===false)throw new Error('资料完整性尚未确认，已暂停完整备份，避免把不完整资料当作完整备份。');
   const { manifest, blocks } = packBundle(normalizeState(state), 'backup');
   return makeZip([{ path: 'momenttheatre-backup.json', content: JSON.stringify(manifest) },
     ...[...blocks].map(([hash, value]) => ({ path: partName(hash), content: JSON.stringify(value) }))], { blob: true });

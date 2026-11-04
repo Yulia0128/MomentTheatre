@@ -7,7 +7,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.1.10';
+export const VERSION = '1.2.0';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -63,6 +63,8 @@ export function normalizeState(raw) {
   assert(raw && typeof raw === 'object' && raw.schemaVersion === SCHEMA, '此资料版本不受当前插件支持，请更新插件；原数据未覆盖。');
   const state = emptyState();
   const s = raw.settings ?? {};
+  // Device-local opt-in; do not add a field to legacy snapshot checksum shapes.
+  if (Object.hasOwn(s, 'autoSync')) state.settings.autoSync = s.autoSync === true;
   // Optional on legacy states: adding defaults would invalidate old sync snapshots.
   if (Object.hasOwn(s, 'phoneAppearance')) state.settings.phoneAppearance = normalizePhoneAppearance(s.phoneAppearance);
   for (const key of ['endpoint', 'model', 'character', 'persona', 'preset', 'proseTheme', 'phoneTheme']) state.settings[key] = text(s[key], 2000) || DEFAULT_SETTINGS[key];

@@ -39,12 +39,15 @@ export function avatarReferences(value) {
   });
   return refs;
 }
-export function unpackAvatars(value, assets) {
+export function unpackAvatars(value, assets, { allowMissing = false } = {}) {
   const verified = new Set();
   return visit(value, item => {
     if (!item || typeof item !== 'object') return item;
     const url = assets.get(item.avatar);
-    if (typeof url !== 'string' || (!verified.has(item.avatar) && avatarHash(url) !== item.avatar)) throw new Error('头像文件缺失或校验失败，原资料未覆盖。');
+    if (typeof url !== 'string' || (!verified.has(item.avatar) && avatarHash(url) !== item.avatar)) {
+      if(allowMissing)return '';
+      throw new Error('头像文件缺失或校验失败，原资料未覆盖。');
+    }
     verified.add(item.avatar);
     return url;
   });

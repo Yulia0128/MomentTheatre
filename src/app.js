@@ -11,6 +11,7 @@ import { migrateStickerCatalogue } from './default-stickers.js';
 import { htmlFilterRules } from './html-filters.js';
 import { probeConnection } from './connection-test.js';
 import { LibrarySync, sharedState, applyShared, equalSync } from './library-sync.js';
+import { AutoSync } from './auto-sync.js';
 import { readerToken } from './regex-card.js';
 import { syncCharacterBooks } from './character-sources.js';
 import { ReaderAssets } from './reader-assets.js';
@@ -97,7 +98,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const filterObserver = new ResizeObserver(entries => {
     for (const entry of entries) filterLayouts.get(entry.target)?.(entry.contentRect.width);
   });
-  let sync = null;
+  let sync = null, autoSync = null;
   let saveTimer, noticeTimer, imageCommit = null, unread = false, disposed = false, busyAction = false;
   let generationError = null, nativePanel = null, wandEntry = null, refreshRegexOptions = () => {}, catalogRequest = 0;
   const finishedSound = completionSound();
@@ -123,12 +124,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   const content = el('div', { class: 'workspace' });
   const fullscreen = readerFullscreen(dialog, content);
   const status = el('div', { class: 'status', role: 'status', 'aria-live': 'polite' });
+  const protection = el('p', { class:'status library-protection', role:'status', hidden:true });
   const nav = el('nav', { class: 'tabs', 'aria-label': '页面' });
   const themeButton = button(windowIcon('day'), toggleTheme, { disabled: true, class: 'icon-button', 'aria-label': '切换日夜模式' });
   const header = el('header', { class: 'topbar' }, el('div', { class: 'brand' }, mobius(), el('span', {}, '瞬息')), nav,
     el('div', { class: 'window-actions' }, themeButton, button(windowIcon('minimize'), () => dialog.close(), { class: 'icon-button', 'aria-label': '收起瞬息，生成继续' })));
   dialog.append(header);
-  dialog.append(status, content);
+  dialog.append(status, protection, content);
   // A slotted light-DOM button is discoverable by document selectors/hit testing.
   // Collectors may move this one node; they never move the actual dialog or its styles.
   const removeLauncherStyle = installLauncherStyle(document);
@@ -146,6 +148,8 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     for (const menu of [...openDropdowns]) if (!e.composedPath().includes(menu)) setDropdownOpen(menu, false);
   };
   shadow.addEventListener('pointerdown', closeOutsideDropdowns);
+  const syncActivity = () => autoSync?.activity();
+  for (const type of ['pointerdown', 'keydown', 'input']) shadow.addEventListener(type, syncActivity);
   shadow.addEventListener('focusin', e => {
     // A real outside control can close menus; transient label/body blur cannot.
     if (e.composedPath()[0]?.matches?.('input,button,textarea,select,a[href],[tabindex]')) closeOutsideDropdowns(e);
@@ -180,7 +184,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     return choice.menu;
   }
   const dropdownField = (title, menu) => el('div', { class: 'field' }, el('span', { class: 'field-label' }, title), menu);
-  dialog.addEventListener('close', () => { persist().catch(report); if (!launcher.hidden) launcher.focus(); });
+  dialog.addEventListener('close', () => { autoSync?.pause(); if(store?.health.writable)persist().catch(report); if (!launcher.hidden) launcher.focus(); });
   dialog.addEventListener('cancel', () => { if (task) notify('已收起，番外仍在生成。'); });
   const current = () => state.stories.find(s => s.id === storyId);
   function notify(message, error = false) {
@@ -195,13 +199,14 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     state.errors.unshift(entry); state.errors = state.errors.slice(0, 50);
     if (task) generationError = entry;
     clearTimeout(noticeTimer); status.textContent = ''; status.dataset.error = 'false';
-    Promise.resolve(imageCommit).catch(() => {}).then(() => store.save(state)).catch(() => {});
+    if(store.health.writable)Promise.resolve(imageCommit).catch(() => {}).then(() => store.save(state)).catch(() => {});
     const list = shadow.querySelector('.error-list'); if (list) list.replaceChildren(...errorRows());
   }
   async function persist() {
     if (!ready) return;
+    if(!store.health.writable)throw new Error('资料正在保护性只读，未保存或同步。');
     if (imageCommit) await imageCommit;
-    clearTimeout(saveTimer); store.checkpoint(state);
+    clearTimeout(saveTimer); saveTimer = null; store.checkpoint(state);
     const retained = limitDraftStories(state);
     const keep = new Set(retained.stories.map(story => story.id));
     const removed = new Set(state.stories.filter(story => !keep.has(story.id)).map(story => story.id));
@@ -212,13 +217,14 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     }
   }
   function scheduleSave() {
-    if (!ready || disposed) return;
+    if (!ready || disposed || !store.health.writable) return;
+    autoSync?.changed();
     try { if (!imageCommit) store.checkpoint(state); } catch (error) { report(error, '保存'); }
     clearTimeout(saveTimer); saveTimer = setTimeout(() => persist().catch(report), 250);
   }
   function setLauncherEnabled(value) { if (!ready) { nativePanel?.sync(!launcher.hidden, true); return; } state.settings.launcherEnabled = value; launcher.hidden = !value; nativePanel?.sync(value); scheduleSave(); }
-  async function action(fn) { if (busyAction) return; busyAction = true; try { await fn(); } catch (e) { report(e); } finally { busyAction = false; } }
-  function open() { unread = false; launcher.querySelector('.unread').hidden = true; launcher.classList.remove('complete'); if (!dialog.open) dialog.showModal(); if (ready) refreshCatalog(false); }
+  async function action(fn) { if (busyAction||store?.health.writable===false) return; busyAction = true; try { await fn(); } catch (e) { report(e); } finally { busyAction = false; } }
+  function open() { unread = false; launcher.querySelector('.unread').hidden = true; launcher.classList.remove('complete'); if (!dialog.open) dialog.showModal(); autoSync?.wake(); if (ready) refreshCatalog(false); }
   function toggleTheme() { if (!ready) return; state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night'; root.dataset.theme = launcher.dataset.theme = state.settings.theme; themeButton.replaceChildren(windowIcon(state.settings.theme)); scheduleSave(); }
   function changeTab(value) { if (editing) { notify('请先保存或取消章节编辑。'); return; } tab = value; render(true); content.scrollTop = 0; }
   function renderNav() { nav.replaceChildren(...[['generate', '番外'], ['scripts', '剧本'], ['library', '故事'], ['themes', '美化'], ['settings', '设置']].map(([value, title]) => button(title, () => changeTab(value), { 'aria-current': value === tab ? 'page' : null, class: value === tab ? 'active' : '' }))); }
@@ -240,6 +246,21 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       entry.page.querySelector('.composer .properties')?.replaceWith(summary(mode, state.settings.words, state.settings[mode === 'phone' ? 'phoneTheme' : 'proseTheme']));
     }
     for (const [name, item] of panes) item.page.hidden = name !== tab;
+    applyReadOnly();
+  }
+  function applyReadOnly(){
+    const locked=ready&&store.health.writable===false;
+    protection.hidden=!locked;
+    if(locked&&!protection.children.length)protection.append(el('span',{},'资料完整性检查未通过，当前仅供阅读；保存、同步和完整备份已暂停。'),button('复制诊断',async()=>{
+      const value=JSON.stringify({appVersion:VERSION,...store.diagnostic()},null,2);
+      try{await navigator.clipboard.writeText(value);notify('诊断信息已复制。');}catch{popup('手动复制诊断信息',el('textarea',{rows:10,value,readonly:true}));}
+    },{class:'text-button'}));
+    if(!locked)protection.replaceChildren();
+    if(!locked)return;
+    for(const control of shadow.querySelectorAll('input,textarea,select,button')){
+      if(control.matches('.tabs button,.story-title,.chapter-buttons button,.reading-toggle,.library-protection button,textarea[readonly]')||['收起瞬息，生成继续','关闭'].includes(control.getAttribute('aria-label'))||['关闭','取消','复制'].includes(control.textContent.trim()))continue;
+      control.disabled=true;
+    }
   }
   async function captureLegacyHtmlFilters(story) {
     if (story.snapshot?.htmlFiltersCaptured) return;
@@ -382,7 +403,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     return page;
   }
   async function run(continuing, toppingUp = false) {
-    if (!ready || disposed || task || editing) return;
+    if (!ready || disposed || !store.health.writable || task || editing) return;
     const settings = clone(state.settings), previousStory = continuing || toppingUp ? current() : null;
     const unfinished = toppingUp ? previousStory?.chapters.at(-1) : null;
     if (toppingUp && !unfinished) return;
@@ -472,7 +493,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function popup(title, body, footer = [], className = '') {
     const pop = el('dialog', { class: `popup ${className}`, 'aria-label': title });
     pop.append(el('div', { class: 'popup-heading' }, el('h2', {}, title), button('×', () => pop.close(), { class: 'icon-button', 'aria-label': '关闭' })), body, el('div', { class: 'actions' }, footer));
-    shadow.append(pop); pop.addEventListener('close', () => { for (const menu of [...openDropdowns]) if (pop.contains(menu)) setDropdownOpen(menu, false); pop.remove(); }, { once: true }); pop.showModal(); return pop;
+    shadow.append(pop); pop.addEventListener('close', () => { for (const menu of [...openDropdowns]) if (pop.contains(menu)) setDropdownOpen(menu, false); pop.remove(); }, { once: true }); pop.showModal(); applyReadOnly(); return pop;
   }
   function ask(title, initial, submit) {
     const input = el('input', { value: initial, maxlength: 120 });
@@ -840,7 +861,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     state.settings[mode === 'phone' ? 'phoneTheme' : 'proseTheme'] = themeId;
   }
   async function refreshCatalog(showNotice = true) {
-    if (!ready || disposed) return;
+    if (!ready || disposed || !store.health.writable) return;
     const request = ++catalogRequest;
     try {
       const next = await host.catalog();
@@ -1121,11 +1142,14 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       download(libraryBackup(saved),`瞬息-同步前备份-${Date.now()}.zip`,'application/zip');
     });
     return el('div',{},
-      el('p',{class:'muted'},preview?'预览中的上传／下载使用本页临时模拟资料，不连接酒馆服务器。':'同一酒馆服务器、同一账号可手动合并作品、剧本、分类、美化、表情和设置；API 密钥仍在每台设备单独填写。'),
-      el('p',{class:'muted'},'请逐台同步，避免同时上传。同篇冲突保留副本；删除不随同步传播，另一设备保留的内容可能重新出现。'),
-      el('p',{class:'muted','data-sync-status':true,role:'status'},sync?.status.text||'当前环境暂不能连接同步服务。'),
-      el('div',{class:'actions'},button('上传到服务器',()=>sync?.run('upload'),{disabled:!sync}),button('从服务器下载',()=>sync?.run('download'),{disabled:!sync}),button('查看保留的副本',syncCopies),button('下载同步前备份',recovery)),
-      el('p',{class:'muted'},'请养成定期备份的习惯，重要修改前建议先备份全部资料。'));
+      el('label',{class:'check-row'},el('input',{type:'checkbox','aria-label':'使用期间自动同步',checked:state.settings.autoSync===true,disabled:!sync,onChange:e=>{
+        state.settings.autoSync=e.target.checked;
+        autoSync?.pause();scheduleSave();
+        if(state.settings.autoSync){autoSync?.status('空闲后检查服务器更新。');autoSync?.wake();}
+        refreshSyncStatus(sync.status);
+      }}),'使用期间自动同步'),
+      el('div',{class:'actions'},button('上传到云端',()=>sync?.run('upload'),{disabled:!sync}),button('从云端下载',()=>sync?.run('download'),{disabled:!sync}),button('查看保留副本',syncCopies),button('下载同步前备份',recovery)),
+      el('p',{class:'muted','data-sync-status':true,role:'status',hidden:!syncStatusText()},syncStatusText()));
   }
   function settingsPage() {
     const s = state.settings;
@@ -1180,9 +1204,11 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     const restore = el('input', { type: 'file', accept: '.json,.zip,application/json,application/zip', hidden: true, onChange: e => action(async () => {
       const file = e.target.files?.[0]; if (!file) return;
       const incoming = limitDraftStories(await restoreLibraryBackup(file)); incoming.themes = incoming.themes.map(validateTheme);
+      // Restoring a different device's backup must never opt this device in.
+      if(Object.hasOwn(state.settings,'autoSync'))incoming.settings.autoSync=state.settings.autoSync;else delete incoming.settings.autoSync;
       confirm('恢复备份', `将替换当前资料库为 ${incoming.stories.length} 篇番外、${incoming.scripts.length} 份剧本、${incoming.categories.length} 个分类。恢复前会自动下载当前备份。`, async () => {
         if (task) throw new Error('请先停止生成再恢复备份。');
-        download(libraryBackup(state), `瞬息-恢复前备份-${Date.now()}.zip`, 'application/zip');
+        download(libraryBackup(state,store.health), `瞬息-恢复前备份-${Date.now()}.zip`, 'application/zip');
         await store.save(incoming,{syncMeta:null}); state = incoming; storyId = state.stories[0]?.id || null; root.dataset.theme = launcher.dataset.theme = state.settings.theme; launcher.hidden = !state.settings.launcherEnabled; nativePanel?.sync(state.settings.launcherEnabled); render(); notify('备份已恢复。');
       });
     }) });
@@ -1199,11 +1225,11 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'parameter-pair reply-parameters' }, settingNumber('最大回复token', 'maxTokens', 128, 200000), el('label', { class: 'stream-setting' }, el('input', { type: 'checkbox', checked: s.stream, onChange: e => update('stream', e.target.checked) }), el('span', {}, '流式传输')))),
       el('section', { class: 'settings-group' }, el('h2', {}, 'API'), dropdownField('生成连接', apiChoice), apiFields, apiActions, connectionStatus),
       stickerLibrary(),
-      el('section', { class: 'settings-group' }, el('h2', {}, '数据'), syncPanel(),
-        el('div', { class: 'actions' }, button('按分类导出 ZIP', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
-        el('small', { class: 'muted' }, '未收藏番外最多保留 10 篇，超出后清理最早创建的；故事收藏和剧本不受影响。'),
-        ),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.1.6：入口提前显示，资料加载失败时可查看原因并重试。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group' }, el('h2', {}, '备份'),
+        el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
+        el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
+      el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.0：加强意外中断后的资料保护。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -1231,24 +1257,47 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (launcher.parentElement === root) placeLauncher();
   });
   launcherObserver.observe(root, { childList: true });
-  const flushInputs = () => { if (!ready || disposed || imageCommit) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
-  const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { flushInputs(); persist().catch(report); } };
+  const flushInputs = () => { if (!ready || disposed || imageCommit || !store.health.writable) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
+  const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { autoSync?.pause(); flushInputs(); if(store?.health.writable)persist().catch(report); } else autoSync?.wake(); };
+  const onOnline = () => autoSync?.wake();
+  const onOffline = () => { autoSync?.pause(); if(state?.settings.autoSync)autoSync?.status('网络已断开 · 有修改尚未同步时，将在联网并空闲后重试。'); };
   const beforeUnload = e => { flushInputs(); if (task || editing) { e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('resize', placeLauncher); window.addEventListener('beforeunload', beforeUnload);
   launcher.hidden = false;
   try { nativePanel = host.mountSettingsPanel?.({ enabled: !launcher.hidden, setEnabled: setLauncherEnabled, disabled: true }); } catch (error) { report(error); }
   try { wandEntry = host.mountWandEntry?.({ open }); } catch (error) { report(error); }
   window.addEventListener('pagehide', flushInputs); document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);
+  function syncStatusText(){
+    if(!sync)return '';
+    if(sync.running&&!sync.automatic)return sync.status.text;
+    if(state.settings.autoSync){
+      const text=autoSync?.text||'';
+      if(/失败/.test(text))return text;
+      if(/有修改尚未同步/.test(text))return '有修改尚未同步';
+      return /^(正在|已自动同步)/.test(text)?text:'';
+    }
+    return sync.status.automatic||sync.status.kind==='idle'?'':sync.status.text;
+  }
   const refreshSyncStatus = value => {
-    for(const node of shadow.querySelectorAll('[data-sync-status]'))node.textContent=value.text;
+    if(!sync?.running&&!value.automatic&&autoSync){autoSync.text=value.text;}
+    for(const node of shadow.querySelectorAll('[data-sync-status]')){const text=syncStatusText();node.textContent=text;node.hidden=!text;}
     // Prevent edits while awaiting the atomic commit. Closing/reloading still leaves
     // the last committed library or its pending-input journal recoverable.
-    const busy=value.kind==='syncing';content.inert=busy;nav.inert=busy;themeButton.disabled=busy;
+    const busy=value.kind==='syncing'&&!value.automatic;content.inert=busy;nav.inert=busy;themeButton.disabled=busy;
+    if(ready)applyReadOnly();
   };
   function initializeSync() {
-  if(host.libraryRemote) {
+  if(host.libraryRemote&&store.health.writable) {
     sync=new LibrarySync({store,remote:host.libraryRemote(),getState:()=>state,prepare:persist,
       canApply:()=>!disposed&&!task&&!editing&&!busyAction&&!shadow.querySelector('.popup[open]'),
+      canApplyShared:shared=>{
+        // Do not reload a running HTML game or scripted card when another device
+        // updates this work. Other works can still merge without touching its frame.
+        const page=panes.get('generate')?.page;
+        const live=page?.querySelector('iframe.html-frame,iframe.prose-frame[sandbox*="allow-scripts"]');
+        return !live||equalSync(current(),shared.stories.find(story=>story.id===storyId));
+      },
       onStatus:refreshSyncStatus,onError:error=>report(error,'跨设备同步'),
       apply:async(shared,metadata,guard)=>{
         const changed=!equalSync(sharedState(state),shared),next=applyShared(state,shared);
@@ -1258,9 +1307,15 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         if(!state.stories.some(story=>story.id===storyId))storyId=state.stories[0]?.id||null;
         chapterIndex=Math.min(chapterIndex,Math.max(0,(current()?.chapters.length||1)-1));
         root.dataset.theme=launcher.dataset.theme=state.settings.theme;themeButton.replaceChildren(windowIcon(state.settings.theme));
-        if(changed&&!disposed)render();
+        if(changed&&!disposed)render(sync.automatic);
       }
     });
+    autoSync=new AutoSync({sync,enabled:()=>ready&&store.health.writable&&state.settings.autoSync===true,
+      active:()=>!disposed&&dialog.open&&document.visibilityState!=='hidden'&&navigator.onLine!==false,
+      idle:()=>store.persistedSequence===store.sequence&&!task&&!editing&&!busyAction&&!imageCommit&&!saveTimer&&!shadow.querySelector('.popup[open]')&&!openDropdowns.size&&!dialog.classList.contains('reading-fullscreen')&&!shadow.activeElement?.matches('textarea,input:not([type=checkbox]):not([type=radio]),select,[contenteditable],iframe'),
+      dirty:()=>!equalSync(sharedState(state),store.syncMeta?.base),onStatus:()=>refreshSyncStatus(sync.status)});
+    store.onSaved=()=>autoSync?.saved();
+    autoSync.wake();
   }
   }
   function renderStartup() {
@@ -1288,12 +1343,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         if (disposed) return;
         startupStyle.textContent = stylesheet;
         store = new LibraryStore(host.scope);
+        store.onHealth=health=>{if(ready&&!health.writable){autoSync?.pause();task?.controller.abort();applyReadOnly();}};
         let loaded = await store.open();
         if (disposed) return;
         loaded.themes = loaded.themes.map(validateTheme);
         const retained = limitDraftStories(loaded);
-        if (retained !== loaded) { await store.save(retained); loaded = retained; }
-        if (migrateStickerCatalogue(loaded.settings)) await store.save(loaded);
+        if (store.health.writable&&retained !== loaded) { await store.save(retained); loaded = retained; }
+        if (store.health.writable&&migrateStickerCatalogue(loaded.settings)) await store.save(loaded);
         if (disposed) return;
         state = loaded; storyId = state.stories[0]?.id || null;
         if (state.editorDraft) {
@@ -1310,7 +1366,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       } catch (error) {
         ready = false; state = null; editing = false; editText = ''; storyId = null; chapterIndex = 0; panes.clear();
         nativePanel?.sync(!launcher.hidden, true);
-        sync?.dispose(); sync = null;
+        autoSync?.dispose();autoSync=null;sync?.dispose(); sync = null;
         await store?.close().catch(() => {}); store = null;
         if (!disposed) { startupError = error; renderStartup(); }
       } finally { loading = null; }
@@ -1322,5 +1378,5 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   host.onCharacterChange?.(() => { if (ready) refreshCatalog(false); });
   if (preview) open();
   const initialLoad = initialize();
-  return { open, ready: initialLoad, retry: initialize, async dispose() { disposed = true; finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); if (imageCommit) await imageCommit.catch(() => {}); if (ready) await store.save(state).catch(() => {}); await store?.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
+  return { open, ready: initialLoad, retry: initialize, async dispose() { disposed = true; autoSync?.dispose(); finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); if (imageCommit) await imageCommit.catch(() => {}); if (ready&&store.health.writable) await store.save(state).catch(() => {}); await store?.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline);nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
 }
