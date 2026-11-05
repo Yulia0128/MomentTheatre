@@ -5,6 +5,11 @@ import {encodeRecords,canonicalEqual,digest} from './storage-records.js';
 export function storageCalculation(kind,value){
   if(kind==='equal')return canonicalEqual(value.a,value.b);
   if(kind==='digest')return digest(value);
+  if(kind==='records'){
+    const verified=[];
+    for(const [hash,node] of value){try{if(digest(node)===hash)verified.push(hash);}catch{/* Missing or invalid disk nodes stay unverified. */}}
+    return verified;
+  }
   if(kind==='assets')return [...value].filter(([hash,url])=>typeof url==='string'&&avatarHash(url)===hash).map(([hash])=>hash);
   if(kind!=='prepare')throw Error('未知资料计算。');
   const packed=packAvatars(value.input,{knownUrls:value.knownImages}),encoded=encodeRecords(packed.data,{indexNonce:value.token});

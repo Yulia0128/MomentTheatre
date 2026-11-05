@@ -372,7 +372,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     page.append(el('div', { class: 'composer' }, promptInput, el('div', { class: 'composer-options' }, modes, summary(mode, state.settings.words, themeId), button(task ? '生成中…' : '生成番外', () => run(false), { class: 'primary', disabled: Boolean(task) || editing }))));
     page.append(el('div', { class: 'generation-feedback', 'aria-live': 'polite' }, generationError ? el('div', { class: 'generation-error', role: 'alert' }, el('strong', {}, `${generationError.stage} · ${generationError.code}`), el('p', {}, generationError.message), button('查看报错记录', () => changeTab('settings'), { class: 'text-button' })) : null));
     if (task) {
-      page.append(el('div', { class: 'task-bar', role: 'status' }, '生成中 · 收起后继续', button('停止', stop, { class: 'outline' })), el('pre', { class: 'stream-output', 'data-stream': true }, task.stream ? task.visiblePartial || '正在准备资料…' : '正在等待完整回复…'));
+      page.append(el('div', { class: 'task-bar', role: 'status' }, task.stopping ? '正在停止并保存已收到的内容…' : '生成中 · 收起后继续', button(task.stopping ? '正在停止…' : '停止', stop, { class: 'outline', disabled: Boolean(task.stopping) })), el('pre', { class: 'stream-output', 'data-stream': true }, task.stream ? task.visiblePartial || '正在准备资料…' : '正在等待完整回复…'));
     }
     if (hasChapters) {
       chapterIndex = Math.min(chapterIndex, story.chapters.length - 1);
@@ -508,6 +508,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       if (mode === 'html') { clearTimeout(noticeTimer); status.textContent = ''; }
       else notify(`本节已生成 · ${result.actual}${result.unit}${result.rounds ? ` · 自动补写 ${result.rounds} 轮` : ''}`);
     } catch (error) {
+      if (controller.signal.aborted) await new Promise(resolve=>setTimeout(resolve,0));
       if (!generation.appended && generation.story && (generation.partial.trim() || generation.sourceContent?.trim())) {
         try { if (unfinished) { unfinished.content = generation.partial || generation.sourceContent; unfinished.sourceContent = generation.sourceContent || unfinished.sourceContent; if (mode === 'phone') unfinished.stickerSnapshot = captureStickerSnapshot(unfinished.content, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }); unfinished.complete = false; generation.story.updatedAt = Date.now(); } else appendChapter(generation.story, { content: generation.partial || generation.sourceContent, sourceContent: generation.sourceContent, stickerSnapshot: mode === 'phone' ? captureStickerSnapshot(generation.partial || generation.sourceContent, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }) : [], readingRegex: generation.readingRegex, instruction: generation.instruction, complete: false, mode, phoneAppearance: appearance, targetWords: mode === 'prose' ? settings.words : 0, targetMessages: mode === 'phone' ? settings.targetMessages : 0, themeId: readingTheme?.id || '', readingTheme }); chapterIndex = generation.story.chapters.length - 1; await persist(); }
         catch (saveError) { report(saveError); }
@@ -521,7 +522,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       else report(error);
     } finally { task = null; host.onMainConflict = null; launcher.classList.remove('busy'); render(); }
   }
-  function stop() { task?.controller.abort(); }
+  function stop() {
+    if(!task||task.stopping)return;
+    task.stopping=true;
+    const bar=shadow.querySelector('.task-bar');
+    if(bar){bar.firstChild.textContent='正在停止并保存已收到的内容…';const control=bar.querySelector('button');control.disabled=true;control.textContent='正在停止…';}
+    task.controller.abort();
+  }
   function popup(title, body, footer = [], className = '') {
     const pop = el('dialog', { class: `popup ${className}`, 'aria-label': title });
     pop.append(el('div', { class: 'popup-heading' }, el('h2', {}, title), button('×', () => pop.close(), { class: 'icon-button', 'aria-label': '关闭' })), body, el('div', { class: 'actions' }, footer));
@@ -559,10 +566,25 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       categorySet.add(created.id); search.value = ''; paintCategories(); setDropdownOpen(choices.menu, true);
     }), {class:'text-button'})));
     paintCategories();
-    let pop; pop = popup('保存番外', el('div', {}, label(story.chapters.every(ch => (ch.mode || story.mode) === 'phone') ? '收藏名称' : '标题', title), el('div', { class: 'field' }, el('span', { class: 'field-label' }, '分类'), choices.menu), label('标签', tags)), [button('取消', () => pop.close()), button('保存', () => action(async () => {
-      story.title = title.value.trim() || story.title; story.tags = parseTags(tags.value);
-      story.categoryIds = [...categorySet]; story.saved = true; story.updatedAt = Date.now(); await persist(); pop.close(); render(); notify('已保存到收藏。');
-    }), { class: 'primary' })]);
+    let pop,saving=false;
+    const saveStory=button('保存',()=>action(async()=>{
+      const updated={...story,title:title.value.trim()||story.title,tags:parseTags(tags.value),categoryIds:[...categorySet],saved:true,updatedAt:Date.now()};
+      const controls=[...pop.querySelectorAll('input,textarea,select,button')].map(control=>[control,control.disabled]);
+      saving=true;for(const [control] of controls)control.disabled=true;saveStory.textContent='保存中…';
+      try{
+        await new Promise(resolve=>setTimeout(resolve,0));
+        await persist({stories:state.stories.map(item=>item.id===updated.id?updated:item)});
+        const titleChanged=updated.title!==story.title;
+        Object.assign(story,updated);state.stories=state.stories.map(item=>item.id===story.id?story:item);
+        pop.close();
+        // Collection metadata does not change the reading document. Keep its
+        // connected iframe, scroll and scripts unless the title actually changed.
+        if(tab!=='generate'||storyId!==story.id||titleChanged)render();
+        notify('已保存到收藏。');
+      }finally{saving=false;for(const [control,disabled] of controls)control.disabled=disabled;saveStory.textContent='保存';if(!store.health.writable)applyReadOnly();}
+    }),{class:'primary'});
+    pop = popup('保存番外', el('div', {}, label(story.chapters.every(ch => (ch.mode || story.mode) === 'phone') ? '收藏名称' : '标题', title), el('div', { class: 'field' }, el('span', { class: 'field-label' }, '分类'), choices.menu), label('标签', tags)), [button('取消', () => pop.close()),saveStory]);
+    pop.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
     const exportButton = button('导出', () => exportStory({ ...story, title: title.value.trim() || story.title }), { class: 'text-button save-story-export', disabled: !story.chapters.length });
     const heading = pop.querySelector('.popup-heading');
     heading.insertBefore(exportButton, heading.lastElementChild);
@@ -1316,7 +1338,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.3：旧资料打不开时可继续使用瞬息。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.4：精简停止与保存处理，增加即时反馈。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {

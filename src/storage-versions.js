@@ -48,7 +48,8 @@ export class LibraryVersions {
     // The candidate's expected keys are known. Read every actual row back in a
     // new readonly transaction; never substitute prepared or cached node bytes.
     const rows=recordKeys?await readValues(this.db,'libraryRecords',[...recordKeys].map(hash=>[hash,[this.scope,hash]])):null;
-    const decoded=await decodeRecords(manifest.root,hash=>rows?rows.get(hash):readValue(this.db,'libraryRecords',[this.scope,hash]),node=>this.recordDigest(node));
+    const verifiedRecords=rows?new Set(await this.owner.compute.run('records',rows)):null;
+    const decoded=await decodeRecords(manifest.root,hash=>rows?rows.get(hash):readValue(this.db,'libraryRecords',[this.scope,hash]),(node,hash)=>verifiedRecords?verifiedRecords.has(hash)?hash:'':this.recordDigest(node));
     if(!decoded.value?.state)throw Error('资料主信息不可用。');
     const refs=avatarReferences(decoded.value),assets=new Map(),issues=[...decoded.issues];
     for(const hash of refs){
@@ -145,8 +146,12 @@ export class LibraryVersions {
         accounts.put(seal({version:1,revision:o.revision,current:head?.current||null,previous:head?.previous||null,pending:manifest.token}),this.headKey);
         tx.objectStore('libraryVersions').put(seal(manifest),[this.scope,manifest.token]);
         const writeMissing=(name,hash,value,expected)=>{
+          // Confirmed nodes are immutable: don't query them again in the write
+          // transaction. The independent candidate readback still verifies every
+          // referenced disk row, and missing confirmed rows are never recreated.
+          if(expected)return;
           const store=tx.objectStore(name),r=store.get([this.scope,hash]);r.onerror=readFailure;
-          r.onsuccess=()=>{if(r.result!==undefined)return;if(expected){options.readFailed=true;options.error=Error('已确认资料记录缺失，已停止保存并保留现场。');tx.abort();}else store.put(value,[this.scope,hash]);};
+          r.onsuccess=()=>{if(r.result===undefined)store.put(value,[this.scope,hash]);};
         };
         for(const [hash,node] of encoded.nodes)writeMissing('libraryRecords',hash,node,this.current?.nodes.has(hash));
         for(const [hash,url] of assets)writeMissing('avatars',hash,url,this.current?.refs.has(hash)||this.legacyRefs.has(hash));
@@ -175,7 +180,10 @@ export class LibraryVersions {
         const versions=new Set([candidate.token,head.current].filter(Boolean));
         const nodes=new Set([...candidate.nodes,...(this.current?.nodes||[])]),refs=new Set([...candidate.refs,...(this.current?.refs||[]),...this.legacyRefs]);
         for(const [name,keep] of [['libraryRecords',nodes],['avatars',refs],['libraryVersions',versions],['libraryCommits',versions]]){
-          const store=tx.objectStore(name),cursor=store.openKeyCursor();cursor.onsuccess=()=>{const row=cursor.result;if(!row)return;if(Array.isArray(row.key)&&row.key[0]===this.scope&&!keep.has(row.key[1]))store.delete(row.key);row.continue();};
+          const store=tx.objectStore(name),range=globalThis.IDBKeyRange?.bound([this.scope],[this.scope,[]]);
+          const keys=store.getAllKeys(range);keys.onsuccess=()=>{
+            for(const key of keys.result)if(Array.isArray(key)&&key[0]===this.scope&&!keep.has(key[1]))store.delete(key);
+          };
         }
       }catch(error){options.error=error;tx.abort();}
     };
@@ -184,8 +192,10 @@ export class LibraryVersions {
   async verifyRetained(candidate){
     // Shared nodes were just read back as part of the candidate. Check the old
     // version's remaining nodes too, before retiring any other confirmed root.
-    for(const hash of this.current?.nodes||[])if(!candidate.nodes.has(hash)){
-      if(await this.recordDigest(await readValue(this.db,'libraryRecords',[this.scope,hash]))!==hash)throw Error('保留版本记录缺失或校验失败。');
+    const remaining=[...(this.current?.nodes||[])].filter(hash=>!candidate.nodes.has(hash));
+    if(remaining.length){
+      const rows=await readValues(this.db,'libraryRecords',remaining.map(hash=>[hash,[this.scope,hash]]));
+      if((await this.owner.compute.run('records',rows)).length!==remaining.length)throw Error('保留版本记录缺失或校验失败。');
     }
     const assets=new Map();
     for(const hash of this.current?.refs||[])if(!candidate.refs.has(hash))assets.set(hash,await readValue(this.db,'avatars',[this.scope,hash]));

@@ -53,7 +53,7 @@ export async function decodeRecords(root,read,hashNode=digest){
     if(cache.has(hash))return cache.get(hash);
     const work=(async()=>{
       nodes.add(hash);let node;
-      try{node=await read(hash);if(await hashNode(node)!==hash)throw Error();}
+      try{node=await read(hash);if(await hashNode(node,hash)!==hash)throw Error();}
       catch{issues.push({stage:'record',hash});return {complete:false};}
       const next=new Set(chain);next.add(hash);
       if(node.kind==='value')return {value:node.value,complete:true};
