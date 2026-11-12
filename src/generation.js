@@ -41,7 +41,7 @@ export async function ensureSummaries({ story, host, settings, signal, onPhase, 
   }
   return story.summaries.filter(s => s.through <= target).sort((a,b) => b.through - a.through)[0] || null;
 }
-export async function generateChapter({ host, settings, snapshot, story, prompt, mode, instruction = '', signal, onChunk, onPhase, onWarnings, onTitle, summary, initialContent = '', onSource }) {
+export async function generateChapter({ host, settings, snapshot, story, prompt, mode, instruction = '', signal, onChunk, onPhase, onWarnings, onTitle, summary, initialContent = '', manualTopUp = false, onSource }) {
   if (mode === 'html') {
     if (story?.chapters?.length) throw new Error('HTML 作品不支持续写。');
     const messages = buildMessages({ snapshot, prompt, mode, maxInputChars: 1000000 });
@@ -56,13 +56,17 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
   }
   const target = mode === 'phone' ? settings.targetMessages || 50 : settings.words;
   const unit = mode === 'phone' ? '条' : '字';
+  const configuredLimit = Number(settings.maxAutoTopUps ?? 2);
+  const limit = Number.isFinite(configuredLimit) ? Math.max(1, Math.min(50, Math.floor(configuredLimit))) : 2;
+  // Every call after the initial request spends an allowance, including retries.
+  const requestLimit = manualTopUp ? 1 : 1 + (settings.autoTopUp !== false ? limit : 0);
   const base = buildMessages({ snapshot, prompt, mode, instruction, chapters: story?.chapters || [], words: settings.words, targetMessages: target, stickers: settings.stickers, summary, maxInputChars: 1000000 });
   onWarnings?.(base.warnings || []);
   let sourceContent = '';
   const names = { character: snapshot?.character?.name, persona: snapshot?.persona?.name };
   let content = mode === 'phone' && initialContent ? serializePhone(parsePhoneReport(initialContent, names).messages) : initialContent, title = '', rounds = 0, failures = 0, stagnant = 0, lastPart = '';
-  const metrics = () => { const size = contentLength(content, mode); return { content, sourceContent, title, complete: true, ...(mode === 'phone' ? { stickerSnapshot: captureStickerSnapshot(content, settings.stickers, names) } : {}), ...(mode === 'phone' ? { messageCount: size, targetMessages: target } : { wordCount: size, targetWords: target }), actual: size, target, unit, rounds, short: false }; };
-  for (let attempt = 0; attempt < 50; attempt++) {
+  const metrics = (complete = true) => { const size = contentLength(content, mode); return { content: content || sourceContent, sourceContent, title, complete, ...(mode === 'phone' ? { stickerSnapshot: captureStickerSnapshot(content, settings.stickers, names) } : {}), ...(mode === 'phone' ? { messageCount: size, targetMessages: target } : { wordCount: size, targetWords: target }), actual: size, target, unit, rounds, short: size < target }; };
+  for (let attempt = 0; attempt < requestLimit; attempt++) {
     signal?.throwIfAborted();
     const prior = content, size = prior ? contentLength(prior, mode) : 0;
     if (size >= target) return metrics();
@@ -95,11 +99,16 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
       }
       signal?.throwIfAborted();
       const retryable = error?.code === 'EMPTY_RESPONSE' || /<none>|fetch|network|502|503|504|stream|terminated/i.test(String(error?.message || error));
-      if (!retryable || ++failures > 2) throw error;
+      if (!retryable) throw error;
       // Keep a partial streamed prose response before asking for the missing tail.
       if (mode === 'prose' && streamed.trim() && !/^\s*<none>\s*$/i.test(streamed)) {
         const part = acceptTitle(extractTitle(streamed, mode)).trim();
         if (part) { content = prior ? prior + '\n\n' + part : part; onChunk?.(content); }
+      }
+      if (++failures > 2) throw error;
+      if (attempt + 1 >= requestLimit) {
+        if (content.trim() || sourceContent.trim()) return metrics(false);
+        throw error;
       }
       onPhase?.('回复中断或为空，已保留内容，正在重新请求…');
       continue;
@@ -109,7 +118,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
       sourceContent += (sourceContent ? '\n\n' : '') + phoneSourceBlock(rawPart); onSource?.(sourceContent);
       const parsed = parsePhoneReport(body, { ...names, group: prior ? parsePhoneReport(prior, names).messages.at(-1)?.group : '' });
       if (parsed.warnings.length) onWarnings?.(parsed.warnings);
-      if (!parsed.recognized) onWarnings?.(['本次回复未识别到消息，原始回复已保留，正在尝试补足。']);
+      if (!parsed.recognized) onWarnings?.(['本次回复未识别到消息，原始回复已保留。']);
       const next = resolveMessageStickers(parsed.messages, settings.stickers, { embedLocal: false });
       const old = prior ? parsePhoneReport(prior, names).messages : [];
       let overlap = 0;
@@ -127,7 +136,7 @@ export async function generateChapter({ host, settings, snapshot, story, prompt,
     onChunk?.(content);
     stagnant = contentLength(content, mode) <= size ? stagnant + 1 : 0;
     if (contentLength(content, mode) >= target) return metrics();
-    if (stagnant >= 2) throw Object.assign(new Error('模型连续未增加新内容，尚未达到目标。内容已保留，可点击继续补足。'), { code: 'NO_PROGRESS' });
+    if (stagnant >= 2) return metrics();
   }
-  throw Object.assign(new Error('本次多轮补写仍未达到目标，已保留全部内容，可点击继续补足。'), { code: 'TARGET_UNMET' });
+  return metrics();
 }

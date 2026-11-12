@@ -7,7 +7,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.2.5';
+export const VERSION = '1.2.6';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -65,6 +65,10 @@ export function normalizeState(raw) {
   const s = raw.settings ?? {};
   // Device-local opt-in; do not add a field to legacy snapshot checksum shapes.
   if (Object.hasOwn(s, 'autoSync')) state.settings.autoSync = s.autoSync === true;
+  // Keep absent legacy fields absent so old save/sync checksums remain valid.
+  // UI and generation use enabled / two attempts when these fields are absent.
+  if (Object.hasOwn(s, 'autoTopUp')) state.settings.autoTopUp = s.autoTopUp !== false;
+  if (Object.hasOwn(s, 'maxAutoTopUps')) state.settings.maxAutoTopUps = Math.floor(clamp(s.maxAutoTopUps, 1, 50, 2));
   // Optional on legacy states: adding defaults would invalidate old sync snapshots.
   if (Object.hasOwn(s, 'phoneAppearance')) state.settings.phoneAppearance = normalizePhoneAppearance(s.phoneAppearance);
   for (const key of ['endpoint', 'model', 'character', 'persona', 'preset', 'proseTheme', 'phoneTheme']) state.settings[key] = text(s[key], 2000) || DEFAULT_SETTINGS[key];

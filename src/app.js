@@ -393,7 +393,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       let readingSurface;
       const expand = button('', () => fullscreen.enter(readingSurface, expand, story.chapters[chapterIndex].mode || story.mode), { class: 'reading-toggle reader-expand', 'aria-label': '全屏阅读', 'aria-expanded': 'false', title: '全屏阅读', disabled: Boolean(task) || editing, hidden: editing });
       expand.innerHTML = readingIcon();
-      page.append(el('div', { class: 'chapter-bar' }, el('span', { class: 'chapter-count muted', 'aria-live': 'polite' }, chapterCount(story, story.chapters[chapterIndex])), el('div', { class: 'chapter-tools' }, story.mode === 'html' ? null : el('div', { class: 'chapter-buttons', 'aria-label': '章节' }, story.chapters.map((ch, i) => button(String(i + 1), () => { if (editing) return notify('请先保存编辑。'); chapterIndex = i; render(); }, { 'aria-pressed': chapterIndex === i, class: chapterIndex === i ? 'selected' : '' }))), expand)));
+      const chapter = story.chapters[chapterIndex], chapterMode = chapter.mode || story.mode;
+      const chapterTarget = chapterMode === 'phone' ? chapter.targetMessages || state.settings.targetMessages : chapter.targetWords || state.settings.words;
+      let canTopUp = false;
+      if (chapterMode !== 'html' && chapterIndex === story.chapters.length - 1) {
+        try { canTopUp = contentLength(chapter.content, chapterMode) < chapterTarget; } catch { /* Keep malformed partial content editable. */ }
+      }
+      page.append(el('div', { class: 'chapter-bar' }, el('div', { class: 'chapter-progress' }, el('span', { class: 'chapter-count muted', 'aria-live': 'polite' }, chapterCount(story, chapter)), canTopUp && !editing ? button('继续补足', () => run(false, true), { class: 'text-button', disabled: Boolean(task) }) : null), el('div', { class: 'chapter-tools' }, story.mode === 'html' ? null : el('div', { class: 'chapter-buttons', 'aria-label': '章节' }, story.chapters.map((ch, i) => button(String(i + 1), () => { if (editing) return notify('请先保存编辑。'); chapterIndex = i; render(); }, { 'aria-pressed': chapterIndex === i, class: chapterIndex === i ? 'selected' : '' }))), expand)));
       if (editing) {
         const phoneChapter = (story.chapters[chapterIndex].mode || story.mode) === 'phone';
         const titleInput = el('input', { value: state.editorDraft?.title ?? story.title, maxlength: 120, onInput: e => { state.editorDraft.title = e.target.value; scheduleSave(); } });
@@ -425,7 +431,6 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         readingSurface = el('div', { class: 'reading-surface' }, makeReader(story, chapterIndex), collapse);
         page.append(readingSurface, el('div', { class: 'actions reader-actions' },
           button('编辑', () => { editing = true; const chapter = story.chapters[chapterIndex]; editText = editablePhoneText(chapter); state.editorDraft = { storyId: story.id, chapterId: chapter.id, content: editText, title: story.title, complete: chapter.complete }; scheduleSave(); render(); }, { disabled: Boolean(task) }),
-          story.mode !== 'html' && chapterIndex === story.chapters.length - 1 && !story.chapters[chapterIndex].complete ? button('继续补足', () => run(false, true), { disabled: Boolean(task) }) : null,
           button('复制', () => copyStory(story)), button('保存', () => organize(story), { disabled: Boolean(task) }),
           button('删除', () => deleteStory(story), { disabled: Boolean(task) })));
       }
@@ -496,7 +501,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       await persist();
       render();
       generation.stage = '生成';
-      const result = await generateChapter({ host, settings, snapshot, story: referenceStory, initialContent: unfinished?.content || '', prompt, mode, instruction: generation.instruction, summary, signal: controller.signal, onPhase, onSource: source => { const initial = unfinished?.sourceContent || unfinished?.content; generation.sourceContent = [initial ? mode === 'phone' ? phoneSourceBlock(initial) : initial : '', source].filter(Boolean).join('\n\n'); }, onWarnings: warnings => { for (const warning of warnings) if (mode === 'phone' && /^(本次有|本次回复)/.test(warning) && !generation.warnings?.has(warning)) { (generation.warnings ||= new Set()).add(warning); report(new Error(warning), '消息整理'); } }, onTitle: title => { if (needsTitle) { generation.story.title = title; scheduleSave(); } }, onChunk: content => {
+      const result = await generateChapter({ host, settings, snapshot, story: referenceStory, initialContent: unfinished?.content || '', manualTopUp: toppingUp, prompt, mode, instruction: generation.instruction, summary, signal: controller.signal, onPhase, onSource: source => { const initial = unfinished?.sourceContent || unfinished?.content; generation.sourceContent = [initial ? mode === 'phone' ? phoneSourceBlock(initial) : initial : '', source].filter(Boolean).join('\n\n'); }, onWarnings: warnings => { for (const warning of warnings) if (mode === 'phone' && /^(本次有|本次回复)/.test(warning) && !generation.warnings?.has(warning)) { (generation.warnings ||= new Set()).add(warning); report(new Error(warning), '消息整理'); } }, onTitle: title => { if (needsTitle) { generation.story.title = title; scheduleSave(); } }, onChunk: content => {
         generation.partial = content;
         if (generation.stream) {
           generation.visiblePartial = mode === 'prose' ? transformProse(content, generation.readingRegex, snapshot).parts.map(p => p.html ? p.text.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, '') : p.text).join('') : mode === 'phone' ? serializePhone(parsePhoneReport(content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) : cleanHtml(content, generation.readingRegex, snapshot);
@@ -505,11 +510,15 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         status.textContent = mode === 'phone' ? `${generation.stage}中 · 正在接收手机消息 · 可以收起窗口` : `${generation.stage}中 · 已收到 ${content.length} 字符 · 可以收起窗口`;
       } });
       if (controller.signal.aborted) throw new DOMException('已停止', 'AbortError');
-      if (unfinished) { Object.assign(unfinished, result, { sourceContent: generation.sourceContent || unfinished.sourceContent }); generation.story.updatedAt = Date.now(); }
+      if (unfinished) { Object.assign(unfinished, result, { sourceContent: generation.sourceContent || unfinished.sourceContent }); invalidateSummaries(generation.story, generation.story.chapters.length - 1); generation.story.updatedAt = Date.now(); }
       else appendChapter(generation.story, { ...result, readingRegex: generation.readingRegex, instruction: generation.instruction, mode, phoneAppearance: appearance, themeId: readingTheme?.id || '', readingTheme });
       generation.appended = true;
       if (result.title && needsTitle) generation.story.title = result.title;
       chapterIndex = generation.story.chapters.length - 1; await persist();
+      if (mode !== 'html' && result.complete === false) {
+        clearTimeout(noticeTimer); status.textContent = '';
+        return;
+      }
       if (needsTitle && !result.title) {
         onPhase('正在拟定标题…');
         try { generation.story.title = await generateTitle({ host, settings, snapshot, prompt, content: result.content, signal: controller.signal }); await persist(); } catch (error) { if (controller.signal.aborted) throw error; report(error, '标题生成'); }
@@ -524,7 +533,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     } catch (error) {
       if (controller.signal.aborted) await new Promise(resolve=>setTimeout(resolve,0));
       if (!generation.appended && generation.story && (generation.partial.trim() || generation.sourceContent?.trim())) {
-        try { if (unfinished) { unfinished.content = generation.partial || generation.sourceContent; unfinished.sourceContent = generation.sourceContent || unfinished.sourceContent; if (mode === 'phone') unfinished.stickerSnapshot = captureStickerSnapshot(unfinished.content, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }); unfinished.complete = false; generation.story.updatedAt = Date.now(); } else appendChapter(generation.story, { content: generation.partial || generation.sourceContent, sourceContent: generation.sourceContent, stickerSnapshot: mode === 'phone' ? captureStickerSnapshot(generation.partial || generation.sourceContent, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }) : [], readingRegex: generation.readingRegex, instruction: generation.instruction, complete: false, mode, phoneAppearance: appearance, targetWords: mode === 'prose' ? settings.words : 0, targetMessages: mode === 'phone' ? settings.targetMessages : 0, themeId: readingTheme?.id || '', readingTheme }); chapterIndex = generation.story.chapters.length - 1; await persist(); }
+        try { if (unfinished) { unfinished.content = generation.partial || generation.sourceContent; unfinished.sourceContent = generation.sourceContent || unfinished.sourceContent; if (mode === 'phone') unfinished.stickerSnapshot = captureStickerSnapshot(unfinished.content, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }); unfinished.complete = false; invalidateSummaries(generation.story, generation.story.chapters.length - 1); generation.story.updatedAt = Date.now(); } else appendChapter(generation.story, { content: generation.partial || generation.sourceContent, sourceContent: generation.sourceContent, stickerSnapshot: mode === 'phone' ? captureStickerSnapshot(generation.partial || generation.sourceContent, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }) : [], readingRegex: generation.readingRegex, instruction: generation.instruction, complete: false, mode, phoneAppearance: appearance, targetWords: mode === 'prose' ? settings.words : 0, targetMessages: mode === 'phone' ? settings.targetMessages : 0, themeId: readingTheme?.id || '', readingTheme }); chapterIndex = generation.story.chapters.length - 1; await persist(); }
         catch (saveError) { report(saveError); }
       }
       if (!continuing && generation.story && generation.story.chapters.length === 0) {
@@ -1277,7 +1286,18 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function settingsPage() {
     const s = state.settings;
     const update = (key, value) => { s[key] = value; scheduleSave(); };
-    const settingNumber = (title, key, min, max, hint) => label(title, el('input', { type: 'number', min, max, value: s[key], onInput: e => { const v = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(v) && v >= min && v <= max) update(key, Math.floor(v)); }, onChange: e => { const v = Number(e.target.value); if (!Number.isFinite(v) || v < min || v > max) { e.target.value = s[key]; return notify(`${title}需在 ${min}–${max} 之间。`, true); } update(key, Math.floor(v)); } }), hint);
+    const settingNumber = (title, key, min, max, hint, fallback = s[key]) => label(title, el('input', { type: 'number', min, max, value: s[key] ?? fallback, onInput: e => { const v = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(v) && v >= min && v <= max) update(key, Math.floor(v)); }, onChange: e => { const v = Number(e.target.value); if (!Number.isFinite(v) || v < min || v > max) { e.target.value = s[key] ?? fallback; return notify(`${title}需在 ${min}–${max} 之间。`, true); } update(key, Math.floor(v)); } }), hint);
+    const topUpValue = () => s.maxAutoTopUps ?? 2;
+    const topUpInput = el('input', { type: 'number', min: 1, max: 50, step: 1, value: topUpValue(), 'aria-label': '自动补足次数', onInput: e => {
+      const value = Number(e.target.value);
+      if (e.target.value !== '' && Number.isInteger(value) && value >= 1 && value <= 50) { update('maxAutoTopUps', value); refreshTopUpStepper(); }
+    }, onChange: () => { topUpInput.value = topUpValue(); refreshTopUpStepper(); } });
+    const stepTopUp = delta => { update('maxAutoTopUps', Math.max(1, Math.min(50, topUpValue() + delta))); topUpInput.value = topUpValue(); refreshTopUpStepper(); };
+    const topUpMinus = button('−', () => stepTopUp(-1), { 'aria-label': '减少自动补足次数' });
+    const topUpPlus = button('+', () => stepTopUp(1), { 'aria-label': '增加自动补足次数' });
+    const topUpStepper = el('fieldset', { class: 'top-up-stepper', 'aria-label': '自动补足次数选择器' }, topUpMinus, topUpInput, topUpPlus);
+    function refreshTopUpStepper() { topUpStepper.disabled = s.autoTopUp === false; topUpMinus.disabled = topUpValue() <= 1; topUpPlus.disabled = topUpValue() >= 50; }
+    refreshTopUpStepper();
     const keyInput = el('input', { type: 'password', autocomplete: 'off', value: host.getKey(), placeholder: 'API Key', onInput: e => { try { host.setKey(e.target.value.trim()); } catch (error) { report(error); } } });
     const apiActions = el('div', { class:'api-actions' });
     const connectionStatus = el('small', { class:'model-status', role:'status', 'data-connection-status':true });
@@ -1357,7 +1377,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
           el('input', { type: 'number', min: 1, max: 200, value: s.contextCount, disabled: !s.readContext, 'aria-label': '读取最近消息数', onChange: e => { update('contextCount', Math.min(200, Math.max(1, Math.floor(Number(e.target.value)) || 10))); e.target.value = s.contextCount; } }), el('small', {}, '条'))),
       el('section', { class: 'settings-group' }, el('h2', {}, '生成参数'),
         el('div', { class: 'parameter-pair' }, settingNumber('目标正文字数', 'words', 100, 20000), settingNumber('目标消息条数', 'targetMessages', 1, 1000)),
-        el('small', { class: 'shared-hint' }, '正文／小手机不足时自动补足；中断后可继续补足，生成与续写共用。HTML 不按字数或条数补写。'),
+        el('div', { class: 'parameter-pair top-up-options' }, el('label', { class: 'top-up-toggle' }, el('input', { type: 'checkbox', checked: s.autoTopUp !== false, onChange: e => { update('autoTopUp', e.target.checked); refreshTopUpStepper(); } }), el('span', {}, '开启自动补足字数')), el('div', { class: 'top-up-setting' }, el('span', {}, '自动补足'), topUpStepper, el('span', {}, '次'))),
         el('div', { class: 'parameter-pair reply-parameters' }, settingNumber('最大回复token', 'maxTokens', 128, 200000), el('label', { class: 'stream-setting' }, el('input', { type: 'checkbox', checked: s.stream, onChange: e => update('stream', e.target.checked) }), el('span', {}, '流式传输')))),
       el('section', { class: 'settings-group' }, el('h2', {}, 'API'), dropdownField('生成连接', apiChoice), apiFields, apiActions, connectionStatus),
       stickerLibrary(),
@@ -1365,7 +1385,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.5：减少重复保存，改善保存中断后的恢复。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.6：自动补足可开关、可限制次数，手动补足每次只请求一次。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
