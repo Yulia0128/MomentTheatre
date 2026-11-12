@@ -104,6 +104,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   let sync = null, autoSync = null;
   let saveTimer, noticeTimer, imageCommit = null, unread = false, disposed = false, busyAction = false;
   let backgroundSave = null, saveAgain = false;
+  let inputDirty = false, inputVersion = 0, restoringBackup = false;
   let generationError = null, nativePanel = null, wandEntry = null, refreshRegexOptions = () => {}, catalogRequest = 0;
   const finishedSound = completionSound();
   const readingWarnings = new Set(), readerTokens = new WeakMap();
@@ -211,9 +212,11 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   }
   async function persist(overrides = null) {
     if (!ready) return;
+    if(restoringBackup)return;
     if(!store.health.writable)throw new Error('资料正在保护性只读，未保存或同步。');
     while (imageCommit) await imageCommit;
-    clearTimeout(saveTimer); saveTimer = null; saveAgain = false; store.checkpoint(state);
+    clearTimeout(saveTimer); saveTimer = null; saveAgain = false;
+    inputDirty=true;const savingVersion=inputVersion;store.checkpoint(state);
     const retained = limitDraftStories(overrides ? { ...state, ...overrides } : state);
     const keep = new Set(retained.stories.map(story => story.id));
     const removed = new Set(state.stories.filter(story => !keep.has(story.id)).map(story => story.id));
@@ -226,9 +229,11 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (retained !== state) {
       state.stories = state.stories.filter(story => !removed.has(story.id));
     }
+    if(inputVersion===savingVersion)inputDirty=false;
   }
   function scheduleSave() {
-    if (!ready || disposed || !store.health.writable) return;
+    if (!ready || disposed || restoringBackup || !store.health.writable) return;
+    inputDirty=true;inputVersion++;
     autoSync?.changed();
     try { if (!imageCommit) store.checkpoint(state); } catch (error) { report(error, '保存'); }
     clearTimeout(saveTimer); saveTimer = setTimeout(() => saveWhenIdle().catch(report), 1000);
@@ -272,13 +277,22 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     protection.hidden=!locked;
     if(locked&&!protection.children.length)protection.append(el('span',{},'资料完整性检查未通过，当前仅供阅读；保存、同步和完整备份已暂停。'),
       button('复制诊断',()=>copyLibraryDiagnostic(store.diagnostic()),{class:'text-button'}),
-      button('重新检查',()=>initialize(),{class:'text-button'}),button('继续使用瞬息',()=>initialize(true),{class:'text-button'}));
+      button('重新检查',()=>initialize(),{class:'text-button'}),
+      store.health.kind==='pending'||store.diagnostic?.().stages?.pending?button('恢复已保存资料',requestInterruptedRecovery,{class:'text-button'}):null,
+      button('继续使用瞬息',()=>initialize(true),{class:'text-button'}));
     if(!locked)protection.replaceChildren();
     if(!locked)return;
     for(const control of shadow.querySelectorAll('input,textarea,select,button')){
       if(control.matches('.tabs button,.story-title,.chapter-buttons button,.reading-toggle,.library-protection button,textarea[readonly]')||['收起瞬息，生成继续','关闭'].includes(control.getAttribute('aria-label'))||['关闭','取消','复制'].includes(control.textContent.trim()))continue;
       control.disabled=true;
     }
+  }
+  function requestInterruptedRecovery(){
+    let pop;
+    const proceed=button('已关闭其他页面，恢复资料',async()=>{pop.close();await initialize(false,true);},{class:'primary'});
+    pop=popup('恢复已保存资料',el('p',{},'请先关闭其他酒馆页面，再继续。将使用最近确认保存的资料，上次未完成的内容会另行保留；它可能尚未保存成功。'),[button('取消',()=>pop.close()),proceed]);
+    // This action changes protection metadata, never edits a readonly story.
+    proceed.disabled=false;
   }
   async function copyLibraryDiagnostic(diagnostic){
     const value=JSON.stringify({appVersion:VERSION,...diagnostic},null,2);
@@ -919,7 +933,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     const request = ++catalogRequest;
     try {
       const next = await host.catalog();
-      if (disposed || request !== catalogRequest) return;
+      if (disposed || restoringBackup || request !== catalogRequest) return;
       catalog = next;
       if (catalog.characterSources && syncCharacterBooks(state.settings, catalog.characterSources)) scheduleSave();
       if (tab === 'settings') render();
@@ -1318,7 +1332,20 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       confirm('恢复备份', `将替换当前资料库为 ${incoming.stories.length} 篇番外、${incoming.scripts.length} 份剧本、${incoming.categories.length} 个分类。恢复前会自动下载当前备份。`, async () => {
         if (task) throw new Error('请先停止生成再恢复备份。');
         download(libraryBackup(state,store.health), `瞬息-恢复前备份-${Date.now()}.zip`, 'application/zip');
-        await store.save(incoming,{syncMeta:null}); state = incoming; storyId = state.stories[0]?.id || null; root.dataset.theme = launcher.dataset.theme = state.settings.theme; launcher.hidden = !state.settings.launcherEnabled; nativePanel?.sync(state.settings.launcherEnabled); render(); notify('备份已恢复。');
+        restoringBackup=true;autoSync?.pause();clearTimeout(saveTimer);saveTimer=null;saveAgain=false;
+        let saved=false;
+        const checkRoute=()=>{try{const route=libraryLocation.current();if(route.scope!==store.scope||route.databaseName!==store.databaseName)throw Error('资料库入口已变化，请重新打开瞬息后再恢复。');}catch(error){error.code='LIBRARY_LOCATION_CHANGED';throw error;}};
+        try{
+          await backgroundSave;while(imageCommit)await imageCommit;
+          checkRoute();await store.save(incoming,{syncMeta:null});saved=true;
+          const verified=await store.load();
+          if(!store.health.writable)throw Error('恢复资料未通过重新读取检查，原记录已保留。');
+          checkRoute();state=verified;inputDirty=false;
+          storyId = state.stories[0]?.id || null; root.dataset.theme = launcher.dataset.theme = state.settings.theme; launcher.hidden = !state.settings.launcherEnabled; nativePanel?.sync(state.settings.launcherEnabled); render(); notify('备份已恢复并确认保存。');
+        }catch(error){
+          if(saved||error.code==='LIBRARY_LOCATION_CHANGED'){store.health={kind:'unavailable',writable:false,issues:[{stage:error.code==='LIBRARY_LOCATION_CHANGED'?'location':'restore'}]};store.onHealth?.(store.health);}
+          throw error;
+        }finally{restoringBackup=false;}
       });
     }) });
     return el('section', { class: 'page settings-page' }, el('div', { class: 'page-heading' }, el('h1', {}, '设置'), button('刷新酒馆资料', () => refreshCatalog(), { class: 'text-button' })),
@@ -1338,7 +1365,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.4：精简停止与保存处理，增加即时反馈。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.5：减少重复保存，改善保存中断后的恢复。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {
@@ -1366,8 +1393,8 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     if (launcher.parentElement === root) placeLauncher();
   });
   launcherObserver.observe(root, { childList: true });
-  const flushInputs = () => { if (!ready || disposed || imageCommit || !store.health.writable) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
-  const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { autoSync?.pause(); flushInputs(); if(store?.health.writable)saveWhenIdle().catch(report); } else autoSync?.wake(); };
+  const flushInputs = () => { if (!ready || disposed || restoringBackup || !inputDirty || imageCommit || !store.health.writable) return; try { store.checkpoint(state); } catch (error) { report(error, '保存'); } };
+  const onVisibilityChange = () => { if (document.visibilityState === 'hidden') { autoSync?.pause(); flushInputs(); if(ready&&inputDirty&&!restoringBackup&&store?.health.writable)saveWhenIdle().catch(report); } else autoSync?.wake(); };
   const onOnline = () => autoSync?.wake();
   const onOffline = () => { autoSync?.pause(); if(state?.settings.autoSync)autoSync?.status('网络已断开 · 有修改尚未同步时，将在联网并空闲后重试。'); };
   const beforeUnload = e => { flushInputs(); if (task || editing) { e.preventDefault(); e.returnValue = ''; } };
@@ -1438,7 +1465,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       startupError ? el('div', { class: 'actions' }, libraryAttempted ? button('继续使用瞬息', () => initialize(true), { class: 'primary' }) : null,
         button('重试', () => initialize(), { class: 'outline' }),startupDiagnostic ? button('复制诊断',()=>copyLibraryDiagnostic(startupDiagnostic),{class:'text-button'}) : null) : null));
   }
-  function initialize(fresh = false) {
+  function initialize(fresh = false, recoverInterrupted = false) {
     if (loading || disposed || ready && store.health.writable) return loading;
     if (task) { stop(); notify('正在停止生成，请稍后再试。'); return; }
     ready = false; protection.hidden = true; libraryAttempted = false;
@@ -1465,20 +1492,24 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         store = new LibraryStore(route.scope, undefined, null, { databaseName: route.databaseName });
         store.onHealth=health=>{if(ready&&!health.writable){autoSync?.pause();task?.controller.abort();applyReadOnly();}};
         phase = 'open';
-        let loaded = await store.open();
+        let loaded = await store.open({recoverInterrupted,deferInputSave:true});
         if (disposed) return;
         phase = 'startup-validation';
         loaded.themes = loaded.themes.map(validateTheme);
-        const retained = limitDraftStories(loaded);
-        if (store.health.writable&&retained !== loaded) { await store.save(retained); loaded = retained; }
-        if (store.health.writable&&migrateStickerCatalogue(loaded.settings)) await store.save(loaded);
+        if(store.health.writable){
+          const retained=limitDraftStories(loaded),migrated=migrateStickerCatalogue(retained.settings);
+          if(retained!==loaded||migrated||store.recoveredCheckpoint){
+            try{await store.save(retained,{waitForLock:true});loaded=retained;}
+            catch(error){if(error.code!=='STORAGE_CONFLICT')throw error;loaded=await store.load({skipInputRecovery:true});loaded.themes=loaded.themes.map(validateTheme);store.notices?.add('input-deferred');}
+          }else loaded=retained;
+        }
         if (disposed) return;
         if (fresh) {
           if (!store.health.writable) throw new Error('新的资料库暂时无法使用，请重试。');
           await store.save(loaded); if (disposed) return;
           phase = 'location'; libraryLocation.activate(route);
         }
-        state = loaded; storyId = state.stories[0]?.id || null;
+        state = loaded;inputDirty=false; storyId = state.stories[0]?.id || null;
         if (state.editorDraft) {
           const saved = state.stories.find(story => story.id === state.editorDraft.storyId);
           const index = saved?.chapters.findIndex(ch => ch.id === state.editorDraft.chapterId) ?? -1;
@@ -1491,6 +1522,9 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         themeButton.disabled = false; themeButton.replaceChildren(windowIcon(state.settings.theme));
         placeLauncher(); content.replaceChildren(); panes.clear(); render(); initializeSync();
         if (fresh) notify('已进入新的本地资料库，可以继续使用瞬息。');
+        else if(store.notices?.has('interrupted'))notify('上次保存被打断，已恢复最近确认的资料；未完成内容另行保留，上次修改可能未保存。');
+        else if(store.notices?.has('previous'))notify('旧保留副本无法完整读取，当前资料已通过检查，可以正常使用。');
+        else if(store.notices?.has('input-deferred'))notify('另一页面正在保存或资料已更新，本次未回放输入草稿；原输入记录仍保留。');
       } catch (error) {
         const diagnostic=store?.diagnostic?.();
         if(diagnostic)startupDiagnostic={...diagnostic,stages:phase==='location'?{location:1}:Object.keys(diagnostic.stages||{}).length?diagnostic.stages:{[phase]:1}};
@@ -1508,5 +1542,5 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   host.onCharacterChange?.(() => { if (ready) refreshCatalog(false); });
   if (preview) open();
   const initialLoad = initialize();
-  return { open, ready: initialLoad, retry: initialize, async dispose() { disposed = true; autoSync?.dispose(); finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); if (imageCommit) await imageCommit.catch(() => {}); if (ready&&store.health.writable) await store.save(state).catch(() => {}); await store?.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline);nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
+  return { open, ready: initialLoad, retry: initialize, async dispose() { disposed = true; autoSync?.dispose(); finishedSound.dispose(); wandEntry?.dispose(); fullscreen.dispose(); sync?.dispose(); stop(); launcherObserver.disconnect(); filterObserver.disconnect(); filterLayouts.clear(); clearTimeout(saveTimer); clearTimeout(noticeTimer); if (imageCommit) await imageCommit.catch(() => {}); if (ready&&store.health.writable&&inputDirty&&!restoringBackup) await store.save(state).catch(() => {}); await store?.close(); host.dispose(); window.removeEventListener('message', onReaderMessage); window.removeEventListener('resize', placeLauncher); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flushInputs); document.removeEventListener('visibilitychange', onVisibilityChange); window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline);nativePanel?.dispose(); launcher.remove(); removeLauncherStyle(); root.remove(); } };
 }

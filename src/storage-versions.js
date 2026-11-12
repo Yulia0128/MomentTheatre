@@ -4,13 +4,14 @@ import {decodeRecords,seal,unseal,digest} from './storage-records.js';
 import {writeTransaction,readValue,readValues,storeKeys,completeTransaction} from './storage-idb.js';
 
 export const VERSION_STORES=['accounts','avatars','libraryRecords','libraryVersions','libraryCommits'];
-const conflict=()=>Error('另一页面已修改资料或同步期间出现新输入，本次保存失败；原有效版本仍保留。');
+const conflict=()=>Object.assign(Error('另一页面已修改资料或同步期间出现新输入，本次保存失败；原有效版本仍保留。'),{code:'STORAGE_CONFLICT'});
 export class LibraryVersions {
-  constructor(owner){this.owner=owner;this.current=null;this.previous=null;this.legacyRefs=new Set();this.legacyIndexKnown=false;this.archiveMode='unknown';}
+  constructor(owner){this.owner=owner;this.current=null;this.previous=null;this.legacyRefs=new Set();this.legacyIndexKnown=false;this.archiveMode='unknown';this.retainedNodes=new Set();this.retainedAssets=new Set();this.retainedVersions=new Set();}
   get db(){return this.owner.db;}
   get scope(){return this.owner.scope;}
   get headKey(){return [this.scope,'v3-head'];}
   get archiveKey(){return [this.scope,'legacy-assets'];}
+  get pendingOwnerKey(){return [this.scope,'pending-owner'];}
   health(kind,issues=[]){this.owner.health={kind,writable:kind==='healthy',issues:issues.map(x=>({stage:x.stage||'integrity'}))};try{this.owner.onHealth?.(this.owner.health);}catch{/* UI notification cannot change storage integrity. */}}
   async keys(store){return (await storeKeys(this.db,store)).filter(key=>Array.isArray(key)&&key[0]===this.scope);}
   async recordDigest(node){
@@ -24,7 +25,11 @@ export class LibraryVersions {
     const hash=/^[a-f0-9]{64}$/;
     // Separate small keys preserve archive references without repeatedly loading
     // a large legacy row. This index is optional and can be rebuilt conservatively.
-    const pins=(await this.keys('accounts')).filter(k=>k.length===3&&k[1]==='legacy-asset'&&hash.test(k[2])).map(k=>k[2]).sort();
+    const keys=await this.keys('accounts');
+    this.retainedNodes=new Set(keys.filter(k=>k.length===3&&k[1]==='interrupted-record').map(k=>k[2]));
+    this.retainedAssets=new Set(keys.filter(k=>k.length===3&&k[1]==='interrupted-asset').map(k=>k[2]));
+    this.retainedVersions=new Set(keys.filter(k=>k.length===3&&k[1]==='interrupted-version').map(k=>k[2]));
+    const pins=keys.filter(k=>k.length===3&&k[1]==='legacy-asset'&&hash.test(k[2])).map(k=>k[2]).sort();
     this.legacyRefs=new Set(pins);
     try{
       const index=unseal(await readValue(this.db,'accounts',this.archiveKey));
@@ -63,7 +68,7 @@ export class LibraryVersions {
     const state=normalizeState(value.state);
     return {token,manifest,value,state,nodes:decoded.nodes,refs,assets,complete,issues};
   }
-  async load(){
+  async load({recoverInterrupted=false}={}){
     this.owner.health={kind:'loading',writable:false,issues:[]};this.current=null;this.previous=null;this.legacyRefs=new Set();this.legacyIndexKnown=false;this.archiveMode='none';
     let head,headBad=false;
     try{const raw=await readValue(this.db,'accounts',this.headKey);if(raw)head=unseal(raw);}catch{headBad=true;}
@@ -114,6 +119,10 @@ export class LibraryVersions {
     }
     const receipt=receipts.find(r=>r.token===chosen.token);
     const receiptMatches=receipt?.root===chosen.manifest.root&&receipt?.revision===chosen.manifest.revision;
+    if(chosen.complete&&head?.current===chosen.token&&head.revision===chosen.manifest.revision&&receiptMatches&&!headBad&&head.pending){
+      try{const repaired=await this.recoverPending(head,{manual:recoverInterrupted});if(repaired)head=repaired;}
+      catch{this.owner.notices.add('recovery-deferred');}
+    }
     const currentIsGood=chosen.complete&&head?.current===chosen.token&&head.revision===chosen.manifest.revision&&receiptMatches&&!head.pending&&!headBad;
     const issues=[...chosen.issues];
     if(headBad||!head)issues.push({stage:'head'});
@@ -123,9 +132,63 @@ export class LibraryVersions {
     if(!receiptMatches)issues.push({stage:'receipt'});
     this.health(currentIsGood?'healthy':chosen.complete?'rollback':'partial',currentIsGood?[]:issues.length?issues:[{stage:'current'}]);
     this.current=chosen;this.owner.revision=chosen.manifest.revision;this.owner.syncMeta=chosen.value.syncMeta||null;
-    if(head?.previous&&head.previous!==chosen.token){try{this.previous=await this.version(head.previous);if(!this.previous.complete&&chosen.complete)this.health('rollback',[{stage:'previous'}]);}catch{if(chosen.complete)this.health('rollback',[{stage:'previous'}]);}}
+    if(head?.previous&&head.previous!==chosen.token){try{this.previous=await this.version(head.previous);if(!this.previous.complete)this.owner.notices.add('previous');}catch{this.owner.notices.add('previous');}}
     this.owner.knownAssets=new Set(chosen.refs);this.owner.knownImages=new Map([...chosen.assets].map(([hash,url])=>[url,hash]));
     return chosen.state;
+  }
+  async recoverPending(observed,{manual=false}={}){
+    const o=this.owner;
+    // A legacy pending marker alone cannot prove that its writer has stopped.
+    const coordinated=await readValue(this.db,'accounts',this.pendingOwnerKey).catch(()=>null);
+    let marker;try{marker=unseal(coordinated);}catch{}
+    if(!manual&&!(marker?.token===observed.pending&&marker.guard==='web-lock'&&o.locks?.request))return null;
+    const locked=await o.writeLock(async crossPage=>{
+      if(!manual&&!crossPage)return null;
+      const head=unseal(await readValue(this.db,'accounts',this.headKey));
+      if(digest(head)!==digest(observed))throw conflict();
+      const current=await this.version(head.current),receipt=unseal(await readValue(this.db,'libraryCommits',[this.scope,head.current]));
+      if(!current.complete||receipt.token!==head.current||receipt.root!==current.manifest.root||receipt.revision!==head.revision||current.manifest.revision!==head.revision)throw Error('当前已确认资料未通过校验，未处理上次中断。');
+      if(typeof head.pending!=='string'||head.pending.length>100)throw Error('未完成保存标记无效，原资料保留。');
+      // Preserve every existing scoped node: even an unreadable candidate root
+      // must not make its descendants disappear during a later normal save.
+      const [records,assets]=await Promise.all([this.keys('libraryRecords'),this.keys('avatars')]);
+      const tx=writeTransaction(this.db,['accounts','libraryCommits'],o),done=completeTransaction(tx),accounts=tx.objectStore('accounts');
+      const q=accounts.get(this.headKey);let failure;
+      q.onsuccess=()=>{
+        try{
+          if(digest(unseal(q.result))!==digest(head))throw conflict();
+          const r=tx.objectStore('libraryCommits').get([this.scope,head.current]);
+          r.onsuccess=()=>{
+            try{
+              if(digest(unseal(r.result))!==digest(receipt))throw conflict();
+              for(const key of records)accounts.put(1,[this.scope,'interrupted-record',key[1]]);
+              for(const key of assets)accounts.put(1,[this.scope,'interrupted-asset',key[1]]);
+              accounts.put(seal({version:1,token:head.pending,revision:head.revision}),[this.scope,'interrupted-version',head.pending]);
+              accounts.put(seal({...head,pending:null}),this.headKey);accounts.delete(this.pendingOwnerKey);
+            }catch(error){failure=error;tx.abort();}
+          };
+        }catch(error){failure=error;tx.abort();}
+      };
+      try{await done;}catch(error){throw failure||error;}
+      for(const key of records)this.retainedNodes.add(key[1]);
+      for(const key of assets)this.retainedAssets.add(key[1]);
+      this.retainedVersions.add(head.pending);o.notices.add('interrupted');
+      return {...head,pending:null};
+    },{ifAvailable:true});
+    return locked.acquired?locked.value:null;
+  }
+  async assertConfirmed(){
+    const tx=this.db.transaction(['accounts','libraryCommits'],'readonly'),done=completeTransaction(tx);
+    const request=tx.objectStore('accounts').get(this.headKey);let failure;
+    request.onsuccess=()=>{
+      try{
+        const head=unseal(request.result);
+        if(head.pending||head.current!==this.current.token||head.revision!==this.owner.revision)throw Object.assign(conflict(),{storageStage:'current'});
+        const q=tx.objectStore('libraryCommits').get([this.scope,head.current]);
+        q.onsuccess=()=>{try{const receipt=unseal(q.result);if(receipt.token!==head.current||receipt.root!==this.current.manifest.root||receipt.revision!==head.revision)throw Error('当前资料确认记录异常，原资料保留。');}catch(error){failure=Object.assign(error,{storageStage:'receipt'});tx.abort();}};
+      }catch(error){failure=Object.assign(error,{storageStage:error.storageStage||'head'});tx.abort();}
+    };
+    try{await done;}catch(error){throw failure||error;}
   }
   guard(options){
     const o=this.owner;
@@ -144,6 +207,7 @@ export class LibraryVersions {
         try{head=request.result?unseal(request.result):null;}catch(error){options.readFailed=true;throw error;}
         if((head?.revision??legacy?.revision??0)!==o.revision||head?.pending)throw conflict();
         accounts.put(seal({version:1,revision:o.revision,current:head?.current||null,previous:head?.previous||null,pending:manifest.token}),this.headKey);
+        accounts.put(seal({version:1,token:manifest.token,guard:options.coordinated?'web-lock':'untracked'}),this.pendingOwnerKey);
         tx.objectStore('libraryVersions').put(seal(manifest),[this.scope,manifest.token]);
         const writeMissing=(name,hash,value,expected)=>{
           // Confirmed nodes are immutable: don't query them again in the write
@@ -172,13 +236,14 @@ export class LibraryVersions {
         if(head.revision!==o.revision||head.pending!==candidate.token||head.current!==(this.current?.token||null))throw conflict();
         const next={version:1,revision:candidate.manifest.revision,current:candidate.token,previous:head.current,pending:null};
         rows.put(seal(next),this.headKey);
+        rows.delete(this.pendingOwnerKey);
         if(options.archiveIndex){
           for(const hash of options.archivePins)rows.put(1,[this.scope,'legacy-asset',hash]);
           rows.put(options.archiveIndex,this.archiveKey);
         }
         tx.objectStore('libraryCommits').put(seal(candidate.manifest),[this.scope,candidate.token]);
-        const versions=new Set([candidate.token,head.current].filter(Boolean));
-        const nodes=new Set([...candidate.nodes,...(this.current?.nodes||[])]),refs=new Set([...candidate.refs,...(this.current?.refs||[]),...this.legacyRefs]);
+        const versions=new Set([candidate.token,head.current,...this.retainedVersions].filter(Boolean));
+        const nodes=new Set([...candidate.nodes,...(this.current?.nodes||[]),...this.retainedNodes]),refs=new Set([...candidate.refs,...(this.current?.refs||[]),...this.legacyRefs,...this.retainedAssets]);
         for(const [name,keep] of [['libraryRecords',nodes],['avatars',refs],['libraryVersions',versions],['libraryCommits',versions]]){
           const store=tx.objectStore(name),range=globalThis.IDBKeyRange?.bound([this.scope],[this.scope,[]]);
           const keys=store.getAllKeys(range);keys.onsuccess=()=>{
@@ -202,9 +267,20 @@ export class LibraryVersions {
     if(assets.size&&(await this.owner.compute.run('assets',assets)).length!==assets.size)throw Error('保留版本资源缺失或校验失败。');
   }
   async commit(state,options){
+    const locked=await this.owner.writeLock(coordinated=>this.commitLocked(state,{...options,coordinated}),{ifAvailable:!options.waitForLock});
+    if(!locked.acquired)throw conflict();
+    return locked.value;
+  }
+  async commitLocked(state,options){
     this.guard(options);const o=this.owner;
     const recovery=options.recoveryValue!==undefined?options.recoveryValue:options.recovery?this.current?.value.state||null:this.current?.value.recovery||null;
     const token=id(),input={state,syncMeta:options.syncMeta||null,recovery};
+    if(this.current&&this.legacyIndexKnown&&await o.compute.run('equal',{a:this.current.value,b:input})){
+      this.guard(options);
+      try{await this.assertConfirmed();}catch(error){this.health('rollback',[{stage:error.storageStage||'read'}]);throw error;}
+      this.guard(options);
+      this.saved(options,false);return;
+    }
     const {encoded,assets,size}=await o.compute.run('prepare',{input,token,knownImages:o.knownImages});
     if(!this.legacyIndexKnown){
       options.archivePins=[...this.legacyRefs].sort();
@@ -221,9 +297,13 @@ export class LibraryVersions {
       await this.confirm(candidate,options);
       this.previous=this.current;this.current=candidate;o.revision=manifest.revision;o.syncMeta=options.syncMeta||null;o.persistedSequence=options.sequence;
       o.knownAssets=new Set(candidate.refs);o.knownImages=new Map([...candidate.assets].map(([hash,url])=>[url,hash]));
-      if(options.expectedRevision!=null)o.syncEpoch++;
-      const pending=o.readCheckpoint();if(pending?.writer===o.writer&&pending.sequence<=options.sequence){try{o.journal?.removeItem(o.journalKey);}catch{/* Committed data is already durable to the host's supported level. */}}
-      try{o.onSaved?.();}catch{/* Observers cannot invalidate a confirmed transaction. */}
+      this.saved(options,true);
     }catch(error){if(staged||options.readFailed)this.health('pending',[{stage:options.readFailed?'read':'commit'}]);throw error;}
+  }
+  saved(options,written){
+    const o=this.owner;o.persistedSequence=options.sequence;
+    if(options.expectedRevision!=null)o.syncEpoch++;
+    const pending=o.readCheckpoint();if(pending?.writer===o.writer&&pending.sequence<=options.sequence){try{o.journal?.removeItem(o.journalKey);}catch{/* Prior confirmed content remains durable even if journal cleanup is blocked. */}}
+    try{o.onSaved?.({written});}catch{/* Observers cannot invalidate a confirmed transaction. */}
   }
 }

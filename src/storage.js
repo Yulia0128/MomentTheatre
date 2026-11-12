@@ -2,10 +2,12 @@ import { normalizeState, clone, id } from './model.js';
 import { packAvatars, unpackAvatars, avatarReferences } from './avatar-assets.js';
 import {LibraryVersions,VERSION_STORES} from './storage-versions.js';
 import {StorageCompute} from './storage-compute.js';
+import {libraryWriteLock} from './storage-lock.js';
 
 export class LibraryStore {
-  constructor(scope, indexedDBFactory = globalThis.indexedDB, journalStorage = null, { databaseName = 'shunxi-library' } = {}) {
+  constructor(scope, indexedDBFactory = globalThis.indexedDB, journalStorage = null, { databaseName = 'shunxi-library', locks = globalThis.navigator?.locks } = {}) {
     this.databaseName = databaseName;
+    this.locks=locks;this.notices=new Set();
     this.knownAssets = new Set(); this.knownImages = new Map(); this.scope = scope; this.factory = indexedDBFactory; this.revision = 0; this.queue = Promise.resolve();
     this.writer = id(); this.sequence = 0; this.persistedSequence = 0; this.syncEpoch = 0; this.activeSync = null; this.journalKey = `shunxi:${scope}:pending-input`;
     this.health={kind:'loading',writable:false,issues:[]};
@@ -30,7 +32,7 @@ export class LibraryStore {
   readCheckpoint() {
     try { return JSON.parse(this.journal?.getItem(this.journalKey) || 'null'); } catch { return null; }
   }
-  async open() {
+  async open(options={}) {
     if (!this.factory) throw new Error('浏览器不支持 IndexedDB，无法安全保存番外。请使用正常浏览模式。');
     this.db = await new Promise((resolve, reject) => {
       const request = this.factory.open(this.databaseName, 3);
@@ -47,12 +49,13 @@ export class LibraryStore {
     });
     this.db.onversionchange = () => {this.health={kind:'closed',writable:false,issues:[{stage:'versionchange'}]};this.onHealth?.(this.health);this.db.close();};
     this.versions=new LibraryVersions(this);
-    return this.load();
+    return this.load(options);
   }
-  async load() {
+  async load(options={}) {
     this.migratedFrom=null;
-    let state=await this.versions.load();
-    if(!this.health.writable)return state;
+    this.recoveredCheckpoint=null;
+    let state=await this.versions.load(options);
+    if(!this.health.writable||options.skipInputRecovery)return state;
     const pending = this.readCheckpoint();
     const manifest=this.versions.current?.manifest;
     if (pending && (pending.revision === this.revision || pending.revision===this.migratedFrom?.revision || (manifest?.writer === pending.writer && (manifest.sequence || 0) < pending.sequence))) {
@@ -65,8 +68,11 @@ export class LibraryStore {
         if (entry) { s.continuationDraft = entry.continuationDraft; s.continuationMode = entry.continuationMode; }
       }
       state = normalizeState(state);
-      await this.save(state);
-      if (this.readCheckpoint()?.writer === pending.writer) this.journal?.removeItem(this.journalKey);
+      this.recoveredCheckpoint=pending;
+      if(!options.deferInputSave){
+        try{await this.save(state,{waitForLock:true});}
+        catch(error){if(error.code!=='STORAGE_CONFLICT')throw error;this.recoveredCheckpoint=null;this.notices.add('input-deferred');return this.versions.load();}
+      }
     }
     return state;
   }
@@ -83,19 +89,27 @@ export class LibraryStore {
     for (const hash of refs) { this.knownAssets.add(hash); this.knownImages.set(assets.get(hash), hash); }
     return decoded;
   }
-  save(state, { syncMeta = this.syncMeta, recovery = false, expectedRevision = null, expectedSequence = null } = {}) {
+  save(state, { syncMeta = this.syncMeta, recovery = false, expectedRevision = null, expectedSequence = null, waitForLock = false } = {}) {
     if(!this.health.writable)return Promise.reject(new Error('资料正在保护性只读，不能保存或同步。'));
     const snapshot=clone(state),metadata=clone(syncMeta||null),sequence=this.sequence,epoch=this.syncEpoch;
-    const work=()=>this.versions.commit(snapshot,{syncMeta:metadata,recovery,expectedRevision,expectedSequence,sequence,epoch});
+    const recovered=this.recoveredCheckpoint;
+    const work=async()=>{await this.versions.commit(snapshot,{syncMeta:metadata,recovery,expectedRevision,expectedSequence,sequence,epoch,waitForLock});this.clearRecoveredCheckpoint(recovered);};
     const result=this.queue.then(work);this.queue=result.catch(()=>{});return result;
   }
+  clearRecoveredCheckpoint(pending){
+    if(!pending)return;
+    const current=this.readCheckpoint();
+    if(current?.writer===pending.writer&&current.sequence===pending.sequence&&current.revision===pending.revision){try{this.journal?.removeItem(this.journalKey);}catch{/* Confirmed data must not become unavailable because journal cleanup failed. */}}
+    if(this.recoveredCheckpoint===pending)this.recoveredCheckpoint=null;
+  }
+  writeLock(run,options){return libraryWriteLock(this,run,options);}
   async syncRecovery() {
     if(!this.health.writable)throw new Error('资料完整性尚未确认，不能导出完整同步备份。');
     return clone(this.versions.current?.value.recovery||null);
   }
   diagnostic(){
     const stages={};for(const item of this.health.issues||[])stages[item.stage]=(stages[item.stage]||0)+1;
-    return {format:'momenttheatre-storage-diagnostic',version:1,databaseVersion:this.db?.version||0,health:this.health.kind,revision:this.revision,stages,durability:this.durability||'unknown',archive:this.versions?.archiveMode||'unknown'};
+    return {format:'momenttheatre-storage-diagnostic',version:1,databaseVersion:this.db?.version||0,health:this.health.kind,revision:this.revision,stages,durability:this.durability||'unknown',archive:this.versions?.archiveMode||'unknown',retainedInterrupted:this.versions?.retainedVersions?.size||0};
   }
   async close() { this.cancelOpen?.(); this.cancelOpen = null; await this.queue; this.compute.close(); this.db?.close(); }
 }
