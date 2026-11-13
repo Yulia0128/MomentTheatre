@@ -1,4 +1,5 @@
 import { localStickerUrl } from './sticker-files.js';
+import { splitSummaryReply } from './summary-protocol.js';
 // Message data stays separate from HTML. No model/user input is evaluated as code.
 export const PHONE_TYPES = ['text', 'voice', 'transfer', 'image', 'sticker', 'location', 'share', 'call', 'video', 'retract'];
 const labels = { text: '文字', voice: '语音', transfer: '转账', image: '图片', sticker: '表情', location: '定位', share: '分享', call: '语音通话', video: '视频通话', retract: '撤回' };
@@ -272,14 +273,15 @@ export function parsePhone(content, names) {
 // Older generated chapters stored that text separately from their message view.
 export const editablePhoneText = chapter => chapter.sourceContent || chapter.content;
 export function savePhoneEdit(chapter, content, library = [], names = {}) {
-  const parsed = parsePhoneReport(content, names);
+  const body = splitSummaryReply(content).body;
+  const parsed = parsePhoneReport(body, names);
   const previous = parsePhoneReport(chapter.content, names).messages;
   const embedded = previous.filter(m => m.type === 'sticker' && safeStickerUrl(m.url)).map(m => ({ name: m.sticker || m.text, url: m.url, description: m.text }));
   const catalog = new Map([...activeStickers(library), ...activeStickers(chapter.stickerSnapshot), ...embedded].map(item => [item.name, item]));
   const stickerNames = new Set(parsed.messages.filter(m => m.type === 'sticker').map(m => m.sticker || m.text));
   chapter.stickerSnapshot = [...catalog.values()].filter(item => stickerNames.has(item.name));
-  chapter.content = content;
-  chapter.sourceContent = '';
+  chapter.content = body;
+  chapter.sourceContent = body !== content ? content : '';
   return parsed;
 }
 const encode = value => scalar(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/\r?\n/g, '\\n');

@@ -7,7 +7,7 @@ import { captureReadingTheme, resolveTheme, resolveLegacyTheme, validateTheme, B
 
 import { createId } from './id.js';
 
-export const VERSION = '1.2.6';
+export const VERSION = '1.2.8';
 export const normalizeMode = mode => ['prose', 'phone', 'html'].includes(mode) ? mode : 'prose';
 export const modeLabel = mode => ({ prose: '正文', phone: '小手机', html: 'HTML' }[mode] || '正文');
 export const SCHEMA = 1;
@@ -31,7 +31,7 @@ export function newStory({ title, prompt, mode, themeId, snapshot }) {
     continuationDraft: '', continuationMode: mode === 'html' ? '' : normalizeMode(mode), summaries: [], createdAt: Date.now(), updatedAt: Date.now() };
 }
 export function appendChapter(story, { content, instruction = '', complete = true, mode = story.mode, themeId = story.themeId, readingTheme = null, phoneAppearance, stickerSnapshot = [], wordCount = 0, targetWords = 0, messageCount = 0, targetMessages = 0, sourceContent = '', readingRegex = [] }) {
-  if (!text(content).trim()) throw new Error('没有可保存的生成内容。');
+  if (!text(content).trim() && !text(sourceContent).trim()) throw new Error('没有可保存的生成内容。');
   if ((story.mode === 'html' || mode === 'html') && (story.mode !== 'html' || mode !== 'html' || story.chapters.length)) throw new Error('HTML 作品独立保存，不支持续写或混合章节。');
   const last = story.chapters.at(-1);
   if (last && !last.complete) throw new Error('请先整理未完成的最后一节，再继续续写。');
@@ -69,6 +69,7 @@ export function normalizeState(raw) {
   // UI and generation use enabled / two attempts when these fields are absent.
   if (Object.hasOwn(s, 'autoTopUp')) state.settings.autoTopUp = s.autoTopUp !== false;
   if (Object.hasOwn(s, 'maxAutoTopUps')) state.settings.maxAutoTopUps = Math.floor(clamp(s.maxAutoTopUps, 1, 50, 2));
+  for (const key of ['storyTagCatalog','scriptTagCatalog']) if (Object.hasOwn(s,key)) state.settings[key] = strings(s[key],10000);
   // Optional on legacy states: adding defaults would invalidate old sync snapshots.
   if (Object.hasOwn(s, 'phoneAppearance')) state.settings.phoneAppearance = normalizePhoneAppearance(s.phoneAppearance);
   for (const key of ['endpoint', 'model', 'character', 'persona', 'preset', 'proseTheme', 'phoneTheme']) state.settings[key] = text(s[key], 2000) || DEFAULT_SETTINGS[key];
@@ -149,7 +150,11 @@ export function normalizeState(raw) {
       themeId: text(s.themeId, 100), snapshot: s.snapshot && typeof s.snapshot === 'object' ? clone(s.snapshot) : null,
       chapters, categoryIds: strings(s.categoryIds).filter(c => categoryIds.has(c)), tags: strings(s.tags, 100), saved: s.saved === true, syncConflict: s.syncConflict === true,
       continuationDraft: s.mode === 'html' ? '' : text(s.continuationDraft), continuationMode: s.mode === 'html' ? '' : (s.continuationMode || chapters.at(-1)?.mode || s.mode) === 'phone' ? 'phone' : 'prose',
-      summaries: list(s.summaries ?? [], 200, '剧情总结').filter(x => Number.isInteger(x.through) && x.through > 0 && x.through <= chapters.length && x.through % 10 === 0).map(x => ({ through: x.through, content: text(x.content, 2000) })),
+      summaries: list(s.summaries ?? [], 10000, '剧情总结').filter(x => Number.isInteger(x.through) && x.through > 0 && x.through <= chapters.length && x.through % 10 === 0).map(x => {
+        assert(typeof x.content === 'string' && x.content.length <= 1000000, '剧情摘要格式或长度不受支持，原资料未覆盖。');
+        if (x.kind !== undefined) assert(['segment', 'century'].includes(x.kind) && x.from === x.through - (x.kind === 'segment' ? 9 : 99) && x.from > 0 && (x.kind !== 'century' || x.through % 100 === 0), '剧情摘要区间无效，原资料未覆盖。');
+        return { through: x.through, content: x.content, ...(x.kind ? { kind: x.kind, from: x.from } : {}) };
+      }),
       createdAt: Number(s.createdAt) || Date.now(), updatedAt: Number(s.updatedAt) || Date.now() };
   });
   state.errors = list(raw.errors ?? [], 50, '报错记录').map(e => ({ time: Number(e.time) || Date.now(), stage: text(e.stage, 80), code: text(e.code, 80), message: text(e.message, 1500) }));

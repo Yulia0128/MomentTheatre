@@ -1,4 +1,7 @@
 import { readStickerFiles, localStickerUrl } from './sticker-files.js';
+import { readStickerLinks } from './sticker-links.js';
+import { tagNames, catalogSettings } from './tag-catalog.js';
+import { tagPatch, categoryPatch, deleteCollectionPatch } from './library-collections.js';
 import { phoneAppearance, avatarUrl, avatarFile, checkAvatarImage } from './phone-appearance.js';
 import { libraryBackup, restoreLibraryBackup } from './library-backup.js';
 import { limitDraftStories } from './draft-retention.js';
@@ -19,7 +22,7 @@ import { defaultRegexSelection, selectedRegexRules, transformProse } from './pre
 import { generateTitle } from './story-title.js';
 import { parsePhoneReport, serializePhone, safeStickerUrl, editablePhoneText, savePhoneEdit, phoneSourceBlock, captureStickerSnapshot } from './phone-format.js';
 import { PROSE_PREVIEW_TITLE, PROSE_PREVIEW_CONTENT } from './theme-preview.js';
-import { VERSION, modeLabel, clone, id, newStory, appendChapter, invalidateSummaries, removeCategory, filterStories, normalizeState } from './model.js';
+import { VERSION, modeLabel, clone, id, newStory, appendChapter, invalidateSummaries, filterStories, normalizeState } from './model.js';
 import { LibraryStore } from './storage.js';
 import { LibraryLocation } from './library-location.js';
 import { BUILTIN_THEMES, validateTheme, resolveTheme, captureReadingTheme, resolveChapterTheme, removeImportedTheme } from './themes.js';
@@ -28,7 +31,8 @@ import { proseDiagnosticText, originalProse } from './prose-diagnostics.js';
 import { cleanHtml, htmlIssue, htmlDocument, HTML_SANDBOX } from './html-work.js';
 import { PHONE_EXAMPLES } from './phone-examples.js';
 import { phoneIcon } from './phone-assets.js';
-import { generateChapter, ensureSummaries, contentLength } from './generation.js';
+import { generateChapter, contentLength } from './generation.js';
+import { splitSummaryReply } from './summary-protocol.js';
 import { errorRecord } from './errors.js';
 import { categoryFiles, makeZip, download } from './archive.js';
 import { canExportText, storyHtmlFile, storyTextFile } from './story-export.js';
@@ -97,6 +101,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   let tab = 'generate', storyId = null, chapterIndex = 0, continuationOpen = false;
   let category = 'all', tag = '', query = '', skinPreview = 'prose', task = null, editing = false, editText = '';
   let scriptTag = '', scriptQuery = '';
+  const selections = { stories: { active: false, ids: new Set() }, scripts: { active: false, ids: new Set() } };
   const filterExpanded = { 分类: false, 标签: false }, filterLayouts = new Map();
   const filterObserver = new ResizeObserver(entries => {
     for (const entry of entries) filterLayouts.get(entry.target)?.(entry.contentRect.width);
@@ -411,11 +416,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
           saveEdit.textContent = '保存中…';
           try {
           if (!editText.trim()) throw new Error('章节内容不能为空。');
+          const editedBody = story.mode === 'html' ? editText : splitSummaryReply(editText).body;
+          if (!editedBody.trim()) throw new Error('章节正文不能为空；摘要不能代替正文。');
           if (story.mode === 'html') { await captureLegacyHtmlFilters(story); if (complete.checked && htmlIssue(editText)) throw new Error(htmlIssue(editText)); story.chapters[chapterIndex].sourceContent=editText; }
           const phoneEdit = phoneChapter ? savePhoneEdit(story.chapters[chapterIndex], editText, state.settings.stickers, { character: story.snapshot?.character?.name, persona: story.snapshot?.persona?.name }) : null;
-          if (!phoneChapter && story.mode !== 'html') story.chapters[chapterIndex].sourceContent = '';
-          const size = complete.checked ? phoneEdit ? phoneEdit.messages.length : contentLength(editText, story.chapters[chapterIndex].mode || story.mode) : 0;
-          if (!phoneChapter) story.title = titleInput.value.trim() || story.title; story.chapters[chapterIndex].content = story.mode==='html' ? cleanHtml(editText)||editText : editText; story.chapters[chapterIndex].complete = complete.checked;
+          if (!phoneChapter && story.mode !== 'html') story.chapters[chapterIndex].sourceContent = editedBody !== editText ? editText : '';
+          const size = complete.checked ? phoneEdit ? phoneEdit.messages.length : contentLength(editedBody, story.chapters[chapterIndex].mode || story.mode) : 0;
+          if (!phoneChapter) story.title = titleInput.value.trim() || story.title; story.chapters[chapterIndex].content = story.mode==='html' ? cleanHtml(editText)||editText : editedBody; story.chapters[chapterIndex].complete = complete.checked;
           story.chapters[chapterIndex][(story.chapters[chapterIndex].mode || story.mode) === 'phone' ? 'messageCount' : 'wordCount'] = size;
           invalidateSummaries(story, chapterIndex);
           story.updatedAt = Date.now(); await persist({ editorDraft: null }); editing = false; render(); notify(story.mode === 'html' ? 'HTML 编辑已保存。' : '编辑已保存，后续续写会使用修改后的内容。');
@@ -493,7 +500,6 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       if (controller.signal.aborted) throw new DOMException('已停止', 'AbortError');
       const onPhase = message => { generation.stage = message.includes('总结') ? '剧情总结' : message.includes('补') ? '自动补写' : '生成'; status.textContent = message; };
       const referenceStory = unfinished ? { ...previousStory, chapters: previousStory.chapters.slice(0, -1) } : previousStory;
-      const summary = referenceStory ? await ensureSummaries({ story: referenceStory, host, settings, signal: controller.signal, onPhase, onSave: persist }) : null;
       if (!generation.story) {
         generation.story = newStory({ title: mode === 'phone' ? '小手机 · ' + (snapshot.character?.name || '角色') + ' · ' + new Date().toLocaleString('zh-CN') : '未命名番外', prompt, mode, themeId: mode === 'html' ? '' : settings[mode === 'phone' ? 'phoneTheme' : 'proseTheme'], snapshot });
         state.stories.unshift(generation.story); storyId = generation.story.id;
@@ -501,7 +507,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       await persist();
       render();
       generation.stage = '生成';
-      const result = await generateChapter({ host, settings, snapshot, story: referenceStory, initialContent: unfinished?.content || '', manualTopUp: toppingUp, prompt, mode, instruction: generation.instruction, summary, signal: controller.signal, onPhase, onSource: source => { const initial = unfinished?.sourceContent || unfinished?.content; generation.sourceContent = [initial ? mode === 'phone' ? phoneSourceBlock(initial) : initial : '', source].filter(Boolean).join('\n\n'); }, onWarnings: warnings => { for (const warning of warnings) if (mode === 'phone' && /^(本次有|本次回复)/.test(warning) && !generation.warnings?.has(warning)) { (generation.warnings ||= new Set()).add(warning); report(new Error(warning), '消息整理'); } }, onTitle: title => { if (needsTitle) { generation.story.title = title; scheduleSave(); } }, onChunk: content => {
+      const result = await generateChapter({ host, settings, snapshot, story: referenceStory, initialContent: unfinished?.content || '', manualTopUp: toppingUp, prompt, mode, instruction: generation.instruction, signal: controller.signal, onPhase, onSource: source => { const initial = unfinished?.sourceContent || unfinished?.content; generation.sourceContent = [initial ? mode === 'phone' ? phoneSourceBlock(initial) : initial : '', source].filter(Boolean).join('\n\n'); }, onWarnings: warnings => { for (const warning of warnings) if (mode === 'phone' && /^(本次有|本次回复)/.test(warning) && !generation.warnings?.has(warning)) { (generation.warnings ||= new Set()).add(warning); report(new Error(warning), '消息整理'); } }, onTitle: title => { if (needsTitle) { generation.story.title = title; scheduleSave(); } }, onChunk: content => {
         generation.partial = content;
         if (generation.stream) {
           generation.visiblePartial = mode === 'prose' ? transformProse(content, generation.readingRegex, snapshot).parts.map(p => p.html ? p.text.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, '') : p.text).join('') : mode === 'phone' ? serializePhone(parsePhoneReport(content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) : cleanHtml(content, generation.readingRegex, snapshot);
@@ -512,9 +518,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       if (controller.signal.aborted) throw new DOMException('已停止', 'AbortError');
       if (unfinished) { Object.assign(unfinished, result, { sourceContent: generation.sourceContent || unfinished.sourceContent }); invalidateSummaries(generation.story, generation.story.chapters.length - 1); generation.story.updatedAt = Date.now(); }
       else appendChapter(generation.story, { ...result, readingRegex: generation.readingRegex, instruction: generation.instruction, mode, phoneAppearance: appearance, themeId: readingTheme?.id || '', readingTheme });
+      if (result.content.trim()) generation.story.summaries.push(...(result.summaries || []));
       generation.appended = true;
       if (result.title && needsTitle) generation.story.title = result.title;
-      chapterIndex = generation.story.chapters.length - 1; await persist();
+      chapterIndex = generation.story.chapters.length - 1; generation.stage = '保存资料'; await persist();
+      generation.stage = '生成';
+      if (mode !== 'html' && !result.content.trim()) report(Object.assign(new Error('本次未收到正文，原始回复已保存；没有追加摘要请求。'), { code: 'EMPTY_BODY' }), '正文生成');
+      for (const warning of result.summaryWarnings || []) report(Object.assign(new Error('本节正文已保存；' + warning + '。后续可继续续写，不会单独重试摘要。'), { code: 'SUMMARY_MISSING' }), '剧情摘要');
       if (mode !== 'html' && result.complete === false) {
         clearTimeout(noticeTimer); status.textContent = '';
         return;
@@ -523,7 +533,6 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         onPhase('正在拟定标题…');
         try { generation.story.title = await generateTitle({ host, settings, snapshot, prompt, content: result.content, signal: controller.signal }); await persist(); } catch (error) { if (controller.signal.aborted) throw error; report(error, '标题生成'); }
       }
-      await ensureSummaries({ story: generation.story, host, settings, signal: controller.signal, onPhase, onSave: persist });
       if (controller.signal.aborted || disposed) throw new DOMException('已停止', 'AbortError');
       if (result.complete !== false) void finishedSound.play();
       unread = !dialog.open; launcher.querySelector('.unread').hidden = !unread;
@@ -533,16 +542,17 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     } catch (error) {
       if (controller.signal.aborted) await new Promise(resolve=>setTimeout(resolve,0));
       if (!generation.appended && generation.story && (generation.partial.trim() || generation.sourceContent?.trim())) {
-        try { if (unfinished) { unfinished.content = generation.partial || generation.sourceContent; unfinished.sourceContent = generation.sourceContent || unfinished.sourceContent; if (mode === 'phone') unfinished.stickerSnapshot = captureStickerSnapshot(unfinished.content, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }); unfinished.complete = false; invalidateSummaries(generation.story, generation.story.chapters.length - 1); generation.story.updatedAt = Date.now(); } else appendChapter(generation.story, { content: generation.partial || generation.sourceContent, sourceContent: generation.sourceContent, stickerSnapshot: mode === 'phone' ? captureStickerSnapshot(generation.partial || generation.sourceContent, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }) : [], readingRegex: generation.readingRegex, instruction: generation.instruction, complete: false, mode, phoneAppearance: appearance, targetWords: mode === 'prose' ? settings.words : 0, targetMessages: mode === 'phone' ? settings.targetMessages : 0, themeId: readingTheme?.id || '', readingTheme }); chapterIndex = generation.story.chapters.length - 1; await persist(); }
-        catch (saveError) { report(saveError); }
+        const retainedContent = generation.partial || (mode === 'html' ? generation.sourceContent : splitSummaryReply(generation.sourceContent).body);
+        try { if (unfinished) { unfinished.content = retainedContent; unfinished.sourceContent = generation.sourceContent || unfinished.sourceContent; if (mode === 'phone') unfinished.stickerSnapshot = captureStickerSnapshot(unfinished.content, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }); unfinished.complete = false; invalidateSummaries(generation.story, generation.story.chapters.length - 1); generation.story.updatedAt = Date.now(); } else appendChapter(generation.story, { content: retainedContent, sourceContent: generation.sourceContent, stickerSnapshot: mode === 'phone' ? captureStickerSnapshot(retainedContent, settings.stickers, { character: generation.story.snapshot?.character?.name, persona: generation.story.snapshot?.persona?.name }) : [], readingRegex: generation.readingRegex, instruction: generation.instruction, complete: false, mode, phoneAppearance: appearance, targetWords: mode === 'prose' ? settings.words : 0, targetMessages: mode === 'phone' ? settings.targetMessages : 0, themeId: readingTheme?.id || '', readingTheme }); chapterIndex = generation.story.chapters.length - 1; await persist(); }
+        catch (saveError) { report(saveError, '保存资料'); }
       }
       if (!continuing && generation.story && generation.story.chapters.length === 0) {
         state.stories = state.stories.filter(s => s.id !== generation.story.id);
         storyId = null;
         await persist().catch(error => report(error, '保存'));
       }
-      if (controller.signal.aborted) notify(mode === 'html' ? 'HTML 生成已停止。已收到的代码已保留，可编辑补全或重新生成。' : generation.appended ? '已停止总结，本节已保存；下次续写会重新总结。' : generation.conflict ? '正文开始生成，已停止跟随模式的番外；已收到的内容保留为草稿。' : '已停止。收到的内容已保留；请编辑并标记本节完成后再续写。');
-      else report(error);
+      if (controller.signal.aborted) notify(mode === 'html' ? 'HTML 生成已停止。已收到的代码已保留，可编辑补全或重新生成。' : generation.appended ? '已停止，本节已保存。' : generation.conflict ? '正文开始生成，已停止跟随模式的番外；已收到的内容保留为草稿。' : '已停止。收到的内容已保留；请编辑并标记本节完成后再续写。');
+      else report(error, generation.stage);
     } finally { task = null; host.onMainConflict = null; launcher.classList.remove('busy'); render(); }
   }
   function stop() {
@@ -564,7 +574,121 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     input.focus();
   }
   function confirm(title, message, submit) {
-    let pop; pop = popup(title, el('p', {}, message), [button('取消', () => pop.close()), button('确认', () => action(async () => { await submit(); pop.close(); render(); }), { class: 'primary' })]);
+    let pop, saving = false;
+    const error = el('p', { class: 'form-error', role: 'alert', hidden: true });
+    pop = popup(title, el('div', {}, el('p', {}, message), error), [button('取消', () => pop.close()), button('确认', () => action(async () => {
+      saving = true; pop.inert = true; error.hidden = true;
+      try { await submit(); pop.close(); render(); }
+      catch (failure) { error.textContent = failure.message; error.hidden = false; report(failure, title); }
+      finally { saving = false; pop.inert = false; }
+    }), { class: 'primary' })]);
+    pop.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
+  }
+  async function commitLibrary(build) {
+    if (task || editing) throw new Error('请先结束生成或保存章节编辑。');
+    await persist();
+    if (backgroundSave) await backgroundSave;
+    while (imageCommit) await imageCommit;
+    if (task || editing) throw new Error('请先结束生成或保存章节编辑。');
+    await persist(build(state));
+  }
+  function tagEditor(scope, input) {
+    const panel = el('div', { id: id(), class: 'dropdown-panel source-menu', hidden: true, role: 'group', 'aria-label': '已有标签选项' });
+    input.classList.add('dropdown-trigger'); input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-controls', panel.id);
+    let restoringFocus = false;
+    const menu = el('div', { class: 'source-dropdown tag-picker', 'data-open': 'false', onKeydown: e => {
+      if (e.key === 'Escape' && menu.dataset.open === 'true') {
+        e.preventDefault(); e.stopPropagation(); setDropdownOpen(menu, false);
+        restoringFocus = true; input.focus(); restoringFocus = false;
+      }
+      if (e.key === 'ArrowDown' && e.target === input) { e.preventDefault(); open(); search.focus(); }
+    } }, label('标签', input), panel);
+    const open = () => {
+      if (restoringFocus) return;
+      for (const other of [...openDropdowns]) if (other !== menu) setDropdownOpen(other, false);
+      setDropdownOpen(menu, true);
+    };
+    input.addEventListener('focus', open); input.addEventListener('click', open);
+    const list = el('div', { class: 'tag-options', 'aria-label': '已有标签' }), chips = new Map();
+    const sync = () => {
+      const selected = new Set(parseTags(input.value));
+      for (const [name, chip] of chips) { chip.setAttribute('aria-pressed', String(selected.has(name))); chip.classList.toggle('selected', selected.has(name)); }
+    };
+    const search = el('input', { type: 'search', placeholder: '搜索标签', 'aria-label': '搜索已有标签', onInput: () => draw() });
+    const draw = () => {
+      const names = tagNames(state, scope), query = search.value.trim().toLocaleLowerCase(); chips.clear();
+      list.replaceChildren(...names.filter(name => name.toLocaleLowerCase().includes(query)).map(name => {
+        const chip = button(name, () => {
+          const selected = parseTags(input.value), has = selected.includes(name);
+          if (!has && selected.length >= 100) return notify('每份作品最多添加 100 个标签。', true);
+          input.value = (has ? selected.filter(t => t !== name) : [...selected, name]).join('，');
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }, { class: 'tag-chip', 'aria-pressed': false }); chips.set(name, chip); return chip;
+      }));
+      if (!chips.size) list.append(el('small', {}, names.length ? '没有匹配标签，可更换关键词或直接输入新标签。' : '暂无已有标签，可直接输入新标签。'));
+      sync();
+    };
+    input.addEventListener('input', sync); panel.append(search, list); draw();
+    return el('div', { class: 'tag-editor' }, menu);
+  }
+  function libraryItems(scope) { return scope === 'stories' ? filterStories(state, { category, tag, query }) : filterScripts(state, { tag: scriptTag, query: scriptQuery }); }
+  function clearSelection(scope) { selections[scope].ids.clear(); updateSelection(scope); }
+  function updateSelection(scope) {
+    const selection = selections[scope], allowed = new Set(libraryItems(scope).map(item => item.id));
+    for (const key of selection.ids) if (!allowed.has(key)) selection.ids.delete(key);
+    const count = shadow.querySelector(`[data-selection-count="${scope}"]`), remove = shadow.querySelector(`[data-selection-delete="${scope}"]`);
+    if (count) count.textContent = `已选 ${selection.ids.size} 项`;
+    if (remove) remove.disabled = !selection.ids.size || Boolean(task) || editing;
+    const all = shadow.querySelector(`[data-selection-all="${scope}"]`);
+    if (all) { all.textContent = allowed.size && [...allowed].every(key => selection.ids.has(key)) ? '取消全选' : '全选'; all.disabled = !allowed.size || Boolean(task) || editing; }
+  }
+  function selectionToggle(scope) { return button(selections[scope].active ? '取消多选' : '多选', () => { selections[scope].active = !selections[scope].active; clearSelection(scope); render(); }, { class: 'text-button', disabled: Boolean(task) || editing }); }
+  function selectionCheckbox(scope, item) { return selections[scope].active ? el('input', { class: 'library-select', type: 'checkbox', value: item.id, 'data-selection-scope': scope, 'aria-label': '选择' + item.title, checked: selections[scope].ids.has(item.id), onChange: e => { e.target.checked ? selections[scope].ids.add(item.id) : selections[scope].ids.delete(item.id); updateSelection(scope); } }) : null; }
+  function selectionBar(scope) {
+    if (!selections[scope].active) return null;
+    updateSelection(scope);
+    const selection = selections[scope];
+    const ids = libraryItems(scope).map(item => item.id), allSelected = ids.length > 0 && ids.every(key => selection.ids.has(key));
+    return el('div', { class: 'selection-bar' }, button(allSelected ? '取消全选' : '全选', () => {
+      const visible = libraryItems(scope).map(item => item.id);
+      selection.ids = visible.length && visible.every(key => selection.ids.has(key)) ? new Set() : new Set(visible);
+      for (const check of shadow.querySelectorAll(`.library-select[data-selection-scope="${scope}"]`)) check.checked = selection.ids.has(check.value);
+      updateSelection(scope);
+    }, { 'data-selection-all': scope, disabled: !ids.length || Boolean(task) || editing }), el('span', { 'data-selection-count': scope, role: 'status' }, `已选 ${selection.ids.size} 项`), button('删除选中', () => {
+      updateSelection(scope);
+      const ids = [...selection.ids]; if (!ids.length) return;
+      confirm(scope === 'stories' ? '删除选中故事' : '删除选中剧本', `确认删除选中的 ${ids.length} 项${scope === 'stories' ? '及其全部章节' : '？已生成故事不受影响'}${scope === 'stories' ? '？' : ''}`, async () => {
+        await commitLibrary(currentState => deleteCollectionPatch(currentState, scope, ids, libraryItems(scope).map(item => item.id)));
+        if (scope === 'stories' && ids.includes(storyId) && !current()) { storyId = null; chapterIndex = 0; }
+        selection.active = false; clearSelection(scope);
+      });
+    }, { class: 'text-button', 'data-selection-delete': scope, disabled: !selection.ids.size || Boolean(task) || editing }));
+  }
+  function manageTaxonomy(scope) {
+    if (task || editing) return notify('请先结束生成或保存章节编辑。', true);
+    const isCategory = scope === 'categories', title = isCategory ? '分类' : '标签', selected = new Set();
+    const body = el('div', { class: 'choice-list taxonomy-list' }); let pop;
+    const rows = () => isCategory ? state.categories : tagNames(state, scope).map(name => ({ id: name, name }));
+    const reopen = () => setTimeout(() => manageTaxonomy(scope), 0);
+    const rename = row => {
+      pop.close(); ask('重命名' + title, row.name, async name => {
+        await commitLibrary(s => isCategory ? categoryPatch(s, 'rename', [row.id], name) : tagPatch(s, scope, 'rename', [row.id], name));
+        if (!isCategory) { if (scope === 'stories' && tag === row.name) tag = name; if (scope === 'scripts' && scriptTag === row.name) scriptTag = name; }
+        clearSelection(isCategory ? 'stories' : scope); reopen();
+      });
+    };
+    const remove = button('删除选中', () => {
+      const ids = [...selected];
+      confirm('删除' + title, `删除选中的 ${ids.length} 个${title}？只解除关联，作品会保留。`, async () => {
+        await commitLibrary(s => isCategory ? categoryPatch(s, 'delete', ids) : tagPatch(s, scope, 'delete', ids));
+        clearSelection(isCategory ? 'stories' : scope); pop.close(); reopen();
+      });
+    }, { disabled: true });
+    const draw = () => { body.replaceChildren(...rows().map(row => el('div', { class: 'manage-row' }, el('input', { type: 'checkbox', 'aria-label': '选择' + row.name, checked: selected.has(row.id), onChange: e => { e.target.checked ? selected.add(row.id) : selected.delete(row.id); remove.disabled = !selected.size; } }), el('span', {}, row.name), button('改名', () => rename(row))))); };
+    draw();
+    pop = popup('管理' + title, body, [button('新建' + title, () => {
+      pop.close(); ask('新建' + title, '', async name => { await commitLibrary(s => isCategory ? categoryPatch(s, 'create', [], name, id()) : tagPatch(s, scope, 'create', [name])); reopen(); });
+    }), button('全选', () => { for (const row of rows()) selected.add(row.id); draw(); remove.disabled = !selected.size; }), remove, button('关闭', () => pop.close())]);
   }
   function organize(story) {
     const title = el('input', { value: story.title, maxlength: 120 });
@@ -596,7 +720,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       saving=true;for(const [control] of controls)control.disabled=true;saveStory.textContent='保存中…';
       try{
         await new Promise(resolve=>setTimeout(resolve,0));
-        await persist({stories:state.stories.map(item=>item.id===updated.id?updated:item)});
+        await commitLibrary(s => ({stories:s.stories.map(item=>item.id===updated.id?updated:item),settings:catalogSettings(s,'stories',updated.tags)}));
         const titleChanged=updated.title!==story.title;
         Object.assign(story,updated);state.stories=state.stories.map(item=>item.id===story.id?story:item);
         pop.close();
@@ -606,7 +730,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         notify('已保存到收藏。');
       }finally{saving=false;for(const [control,disabled] of controls)control.disabled=disabled;saveStory.textContent='保存';if(!store.health.writable)applyReadOnly();}
     }),{class:'primary'});
-    pop = popup('保存番外', el('div', {}, label(story.chapters.every(ch => (ch.mode || story.mode) === 'phone') ? '收藏名称' : '标题', title), el('div', { class: 'field' }, el('span', { class: 'field-label' }, '分类'), choices.menu), label('标签', tags)), [button('取消', () => pop.close()),saveStory]);
+    pop = popup('保存番外', el('div', {}, label(story.chapters.every(ch => (ch.mode || story.mode) === 'phone') ? '收藏名称' : '标题', title), el('div', { class: 'field' }, el('span', { class: 'field-label' }, '分类'), choices.menu), tagEditor('stories', tags)), [button('取消', () => pop.close()),saveStory]);
     pop.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
     const exportButton = button('导出', () => exportStory({ ...story, title: title.value.trim() || story.title }), { class: 'text-button save-story-export', disabled: !story.chapters.length });
     const heading = pop.querySelector('.popup-heading');
@@ -639,9 +763,8 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   }
   function deleteStory(story) {
     const whole = () => confirm(story.mode === 'html' ? '删除 HTML 作品' : '删除整篇番外', `删除「${story.title}」及全部章节？`, async () => {
-      state.stories = state.stories.filter(s => s.id !== story.id);
-      if (state.editorDraft?.storyId === story.id) state.editorDraft = null;
-      storyId = null; chapterIndex = 0; await persist();
+      await commitLibrary(s => deleteCollectionPatch(s, 'stories', [story.id], [story.id]));
+      storyId = null; chapterIndex = 0;
     });
     if (story.mode === 'html' || !story.chapters.length) return whole();
     const chapterId = story.chapters[chapterIndex]?.id;
@@ -660,22 +783,21 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     ]);
   }
   function categoryItems() { return [...(state.categories.length ? [{ id: 'all', name: '全部' }, ...state.categories] : []), { id: 'uncategorized', name: '未分类' }]; }
-  function chooseCategory(value) { category = value; render(); }
-  function addCategory(onCreated) { ask('新建分类', '', async name => { if (!name) throw new Error('分类名称不能为空。'); if (state.categories.some(c => c.name === name)) throw new Error('已有同名分类。'); const created = {id:id(),name}; state.categories.push(created); await persist(); if (typeof onCreated === 'function') onCreated(created); }); }
-  function manageCategories() {
-    let pop; pop = popup('管理分类', el('div', { class: 'choice-list' }, state.categories.map(c => el('div', { class: 'manage-row' }, el('span', {}, c.name), button('改名', () => { pop.close(); ask('重命名分类', c.name, async name => { if (!name || state.categories.some(other => other.id !== c.id && other.name === name)) throw new Error('名称不能为空或重复。'); c.name = name; await persist(); }); }), button('删除', () => { pop.close(); confirm('删除分类', '只解除归类，保留分类中的番外。', async () => { removeCategory(state, c.id); if (category === c.id) category = 'all'; await persist(); }); })))));
-  }
+  function chooseCategory(value) { clearSelection('stories'); category = value; render(); }
+  function addCategory(onCreated) { ask('新建分类', '', async name => { const key=id(); await commitLibrary(s => categoryPatch(s,'create',[],name,key)); if (typeof onCreated === 'function') onCreated(state.categories.find(c=>c.id===key)); }); }
+  function manageCategories() { manageTaxonomy('categories'); }
   function storyRows() {
     const stories = filterStories(state, { category, tag, query });
     if (!stories.length) return [el('div', { class: 'empty-state' }, el('h2', {}, '这里还没有故事'), el('p', {}, '换个分类或标签看看，或生成新的番外。'))];
-    return stories.map(story => el('article', { class: 'story-row' }, button(story.title, () => { if (task) return notify('请先完成当前生成。'); storyId = story.id; chapterIndex = Math.max(0, story.chapters.length - 1); tab = 'generate'; continuationOpen = false; render(); }, { class: 'story-title' }),
+    return stories.map(story => el('article', { class: 'story-row' + (selections.stories.active ? ' selection-row' : '') }, selectionCheckbox('stories',story), button(story.title, () => { if (task) return notify('请先完成当前生成。'); storyId = story.id; chapterIndex = Math.max(0, story.chapters.length - 1); tab = 'generate'; continuationOpen = false; render(); }, { class: 'story-title', disabled: selections.stories.active }),
       el('span', { class: 'story-meta' }, `${story.mode === 'html' ? '独立作品' : `${story.chapters.length} 节`} · ${new Set(story.chapters.map(ch => ch.mode || story.mode)).size > 1 ? '混合' : modeLabel(story.chapters[0]?.mode || story.mode)}`),
       el('span', { class: 'story-categories' }, story.categoryIds.map(key => state.categories.find(c => c.id === key)?.name).filter(Boolean).join(' / ') || '未分类'),
-      el('span', { class: 'story-tags' }, story.tags.slice(0, 3).join(' · ')), button('⋯', () => organize(story), { 'aria-label': `整理${story.title}`, class: 'icon-button' })));
+      el('span', { class: 'story-tags' }, story.tags.slice(0, 3).join(' · ')), button('⋯', () => organize(story), { 'aria-label': `整理${story.title}`, class: 'icon-button', disabled: selections.stories.active })));
   }
   async function commitScripts(collections) {
     if (task) throw new Error('请等待当前生成完成，再保存或删除剧本。');
     await persist();
+    if (collections.scripts) collections = {...collections,settings:catalogSettings(state,'scripts',collections.scripts.flatMap(item=>item.tags))};
     await store.save({ ...state, ...collections });
     Object.assign(state, collections);
   }
@@ -707,7 +829,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
     const tags = el('input', { value: draft.tagsText, placeholder: '用逗号分隔，如：小手机，甜', onInput: e => update('tagsText', e.target.value) });
     const mode = singleChoice('生成方式', ['any', 'prose', 'phone', 'html'].map(value => ({ value, label: scriptModeLabel(value) })), draft.mode, value => update('mode', value));
     const error = el('p', { class: 'form-error', role: 'alert', hidden: true });
-    let pop; pop = popup(draft.scriptId ? '编辑剧本' : '新建剧本', el('div', {}, label('名称', title), label('指令内容', content), label('标签', tags), dropdownField('生成方式', mode), error), [
+    let pop; pop = popup(draft.scriptId ? '编辑剧本' : '新建剧本', el('div', {}, label('名称', title), label('指令内容', content), tagEditor('scripts', tags), dropdownField('生成方式', mode), error), [
       button('删除草稿', () => { pop.close(); confirm('删除剧本草稿', '删除这份未完成的编辑？已保存的剧本不受影响。', async () => {
         await commitScripts({ scriptDrafts: state.scriptDrafts.filter(d => d.id !== draft.id) });
       }); }),
@@ -781,18 +903,18 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   function scriptRows() {
     const scripts = filterScripts(state, { tag: scriptTag, query: scriptQuery });
     if (!scripts.length) return [el('div', { class: 'empty-state' }, el('h2', {}, '这里还没有剧本'), el('p', {}, '新建一份剧本，或换个标签、关键词看看。'))];
-    return scripts.map(script => el('article', { class: 'story-row script-row' }, button(script.title, () => viewScript(script), { class: 'story-title' }),
+    return scripts.map(script => el('article', { class: 'story-row script-row' + (selections.scripts.active ? ' selection-row' : '') }, selectionCheckbox('scripts',script), button(script.title, () => viewScript(script), { class: 'story-title', disabled: selections.scripts.active }),
       el('span', { class: 'story-meta' }, scriptModeLabel(script.mode)), el('span', { class: 'script-excerpt' }, script.content),
-      el('span', { class: 'story-tags' }, script.tags.slice(0, 3).join(' · ')), button('⋯', () => viewScript(script), { 'aria-label': `查看${script.title}`, class: 'icon-button' })));
+      el('span', { class: 'story-tags' }, script.tags.slice(0, 3).join(' · ')), button('⋯', () => viewScript(script), { 'aria-label': `查看${script.title}`, class: 'icon-button', disabled: selections.scripts.active })));
   }
   function scriptsPage() {
-    const tags = [...new Set(state.scripts.flatMap(s => s.tags))];
+    const tags = tagNames(state,'scripts');
     if (!tags.includes(scriptTag)) scriptTag = '';
     const list = el('div', { class: 'story-list' }, scriptRows());
-    const search = el('input', { type: 'search', placeholder: '搜索剧本', value: scriptQuery, 'aria-label': '搜索剧本', onInput: e => { scriptQuery = e.target.value; list.replaceChildren(...scriptRows()); } });
-    return el('section', { class: 'page library-main scripts-page' }, el('div', { class: 'page-heading' }, el('h1', {}, '剧本收藏')), search,
-      el('div', { class: 'library-tools' }, button('＋ 新建剧本', () => startScript()), button('导入剧本', importScripts)),
-      libraryFilterRow('标签', [{ value: '', name: '全部' }, ...tags.map(t => ({ value: t, name: t }))].map(t => button(t.name, () => { scriptTag = t.value; render(); }, { 'aria-pressed': scriptTag === t.value, class: scriptTag === t.value ? 'active' : '' })), 'tag-filter', 'scripts-tags'), list);
+    const search = el('input', { type: 'search', placeholder: '搜索剧本', value: scriptQuery, 'aria-label': '搜索剧本', onInput: e => { clearSelection('scripts'); scriptQuery = e.target.value; list.replaceChildren(...scriptRows()); updateSelection('scripts'); } });
+    return el('section', { class: 'page library-main scripts-page' }, el('div', { class: 'page-heading' }, el('h1', {}, '剧本收藏'), selectionToggle('scripts')), search,
+      el('div', { class: 'library-tools' }, button('＋ 新建剧本', () => startScript()), button('导入剧本', importScripts), button('管理标签',()=>manageTaxonomy('scripts'))),
+      libraryFilterRow('标签', [{ value: '', name: '全部' }, ...tags.map(t => ({ value: t, name: t }))].map(t => button(t.name, () => { clearSelection('scripts'); scriptTag = t.value; render(); }, { 'aria-pressed': scriptTag === t.value, class: scriptTag === t.value ? 'active' : '' })), 'tag-filter', 'scripts-tags'), selectionBar('scripts'), list);
   }
   function libraryFilterRow(title, controls, className, key = className) {
       filterExpanded[key] ??= false;
@@ -816,13 +938,13 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
   }
   function libraryPage() {
     const categories = categoryItems(); if (!categories.some(c => c.id === category)) category = state.categories.length ? 'all' : 'uncategorized';
-    const tags = [...new Set(state.stories.filter(s => s.saved).flatMap(s => s.tags))];
+    const tags = tagNames(state,'stories'); if (!tags.includes(tag)) tag = '';
     const list = el('div', { class: 'story-list' }, storyRows());
-    const search = el('input', { type: 'search', placeholder: '搜索番外', value: query, 'aria-label': '搜索番外', onInput: e => { query = e.target.value; list.replaceChildren(...storyRows()); } });
-    return el('section', { class: 'page library-main' }, el('div', { class: 'page-heading' }, el('h1', {}, '故事收藏')), search,
-      el('div', { class: 'library-tools' }, button('＋ 新建分类', addCategory), button('管理分类', manageCategories)),
+    const search = el('input', { type: 'search', placeholder: '搜索番外', value: query, 'aria-label': '搜索番外', onInput: e => { clearSelection('stories'); query = e.target.value; list.replaceChildren(...storyRows()); updateSelection('stories'); } });
+    return el('section', { class: 'page library-main' }, el('div', { class: 'page-heading' }, el('h1', {}, '故事收藏'), selectionToggle('stories')), search,
+      el('div', { class: 'library-tools' }, button('管理分类', manageCategories), button('管理标签',()=>manageTaxonomy('stories'))),
       libraryFilterRow('分类', categories.map(c => button(c.name, () => chooseCategory(c.id), { 'aria-pressed': category === c.id, class: category === c.id ? 'active' : '' })), 'category-filter'),
-      libraryFilterRow('标签', [{ value: '', name: '全部' }, ...tags.map(t => ({ value: t, name: t }))].map(t => button(t.name, () => { tag = t.value; render(); }, { 'aria-pressed': tag === t.value, class: tag === t.value ? 'active' : '' })), 'tag-filter'), list);
+      libraryFilterRow('标签', [{ value: '', name: '全部' }, ...tags.map(t => ({ value: t, name: t }))].map(t => button(t.name, () => { clearSelection('stories'); tag = t.value; render(); }, { 'aria-pressed': tag === t.value, class: tag === t.value ? 'active' : '' })), 'tag-filter'), selectionBar('stories'), list);
   }
   function sampleStory(mode) {
     return { title: mode === 'phone' ? '晚安之前' : PROSE_PREVIEW_TITLE, mode, snapshot: { character: { name: preview ? '林舟' : catalog.currentCharacter || '角色' } }, chapters: [{ complete: true, ...(mode === 'phone' ? { phoneAppearance: phoneAppearance(state.settings.phoneAppearance) } : {}), content: mode === 'phone' ? serializePhone([...PHONE_EXAMPLES, { type: 'retract', sender: 'char', time: '23:54', text: '其实，只是想多听一会儿你的声音。' }]) : PROSE_PREVIEW_CONTENT }] };
@@ -1167,7 +1289,12 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
           el('div', { class: 'actions' }, button('上一张', () => choose(i - 1), { disabled: i === 0 }), button('下一张', () => choose(i + 1), { disabled: i === draft.items.length - 1 })));
       };
       drawEditor();
-      pop = popup('添加表情包', el('div', {}, body, feedback), [button('关闭', () => pop.close()), button('保存全部', () => action(async () => {
+      pop = popup('添加表情包', el('div', {}, body, feedback), [button('取消', () => action(async () => {
+        body.inert = true;
+        try { await commitStickers({ stickerBatchDraft: null, stickerDraft: null }); pop.close(); draw(); }
+        catch (error) { feedback.textContent = error.message; }
+        finally { body.inert = false; }
+      })), button('保存全部', () => action(async () => {
         feedback.textContent = '';
         const names = new Set(state.settings.stickers.map(item => item.name.trim()));
         const items = draft.items.map(item => ({ name: item.name.trim(), url: safeStickerUrl(item.url), description: item.description.trim() }));
@@ -1179,7 +1306,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         }
         if (state.settings.stickers.length + items.length > 500) { feedback.textContent = '最多保存 500 个表情包。'; return; }
         body.inert = true;
-        try { await commitStickers({ stickers: [...state.settings.stickers, ...items], stickerBatchDraft: null }); pop.close(); draw(); }
+        try { await commitStickers({ stickers: [...state.settings.stickers, ...items], stickerBatchDraft: null, stickerDraft: null }); pop.close(); draw(); }
         catch (error) { feedback.textContent = error.message; }
         finally { body.inert = false; }
       }), { class: 'primary' })]);
@@ -1193,39 +1320,61 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
       const field = (title, key, max, placeholder) => label(title, control(key, max, placeholder));
       const feedback = el('p', { role: 'alert', class: 'sticker-editor-error' });
       const invalid = message => { feedback.textContent = message; throw new Error(message); };
-      let pop;
+      let pop, active = true;
+      const usePictures = async items => {
+        if (disposed || !active || pop.open === false) return;
+        if (index === null) {
+          await commitStickers({ stickerBatchDraft: { items, selected: 0 } }); pop.close(); batchEditor();
+        } else {
+          const next = { ...draft, item: { ...draft.item, url: items[0].url } };
+          await commitStickers({ stickerDraft: next }); pop.close(); editSticker(index);
+        }
+      };
+      const pasteLinks = () => {
+        let linkPop, open = true;
+        const text = el('textarea', { rows: 7, maxlength: 1000000, 'aria-label': '粘贴图床链接', placeholder: index === null ? '粘贴含图片直链的文本，每批最多 9 张。' : '粘贴一个图片直链，替换当前图片。' });
+        const error = el('p', { role: 'alert', class: 'sticker-editor-error' });
+        const read = button('识别并预览', () => action(async () => {
+          linkPop.inert = true; error.textContent = '正在识别并读取图片…';
+          try {
+            const items = await readStickerLinks(text.value, index === null ? 9 : 1);
+            if (!open || disposed || linkPop.open === false) return;
+            await usePictures(items); linkPop.close();
+          } catch (failure) { error.textContent = failure.message; }
+          finally { linkPop.inert = false; }
+        }), { class: 'primary' });
+        linkPop = popup('图床上传', el('div', {}, label('粘贴文本', text), error), [button('取消', () => linkPop.close()), read]);
+        linkPop.addEventListener('close', () => { open = false; }, { once: true });
+      };
       const upload = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple: index === null, hidden: true, onChange: e => action(async () => {
         const files = Array.from(e.target.files || []); e.target.value = ''; if (!files.length) return;
         feedback.textContent = '正在读取图片…'; pop.inert = true;
         try {
           if (index !== null && files.length !== 1) throw new Error('修改表情包时请选择一张图片。');
           const items = await readStickerFiles(files);
-          if (disposed) return;
-          if (index === null) {
-            await commitStickers({ stickerBatchDraft: { items, selected: 0 } }); pop.close(); batchEditor();
-          } else {
-            const next = { ...draft, item: { ...draft.item, url: items[0].url } };
-            await commitStickers({ stickerDraft: next }); pop.close(); editSticker(index);
-          }
+          await usePictures(items);
         } catch (error) { feedback.textContent = error.message; }
         finally { pop.inert = false; }
       }) });
-      const imageId = 'sticker-image-' + id();
-      const imageField = el('div', { class: 'field' },
-        el('div', { class: 'sticker-image-heading' }, el('label', { class: 'field-label', for: imageId }, '图片地址'), button('本地上传', () => upload.click(), { class: 'text-button' })),
-        control('url', 4000, localStickerUrl(draft.item.url) ? '填写新直链可替换本地图片' : 'https://…', { id: imageId, 'aria-label': '图片地址' }), upload);
-      pop = popup(index === null ? '添加表情包' : '修改表情包', el('div', {}, field('表情包名字', 'name', 120, '猫猫点头'), imageField, localStickerUrl(draft.item.url) ? thumbnail(draft.item) : null, field('描述', 'description', 1000, '开心地赞同、答应对方'), feedback),
-        [button('取消', () => { pop.close(); draw(); }), button('保存', () => action(async () => {
+      const sources = el('div', { class: 'sticker-sources' }, button('本地上传', () => upload.click(), { class: 'text-button' }), button('图床上传', pasteLinks, { class: 'text-button' }), upload);
+      pop = popup(index === null ? '添加表情包' : '修改表情包', el('div', {}, sources, field('表情包名字', 'name', 120, '猫猫点头'), safeStickerUrl(draft.item.url) ? thumbnail(draft.item) : null, field('描述', 'description', 1000, '开心地赞同、答应对方'), feedback),
+        [button('取消', () => action(async () => {
+          pop.inert = true;
+          try { await commitStickers({ stickerDraft: null }); pop.close(); draw(); }
+          catch (error) { feedback.textContent = error.message; }
+          finally { pop.inert = false; }
+        })), button('保存', () => action(async () => {
           const item = { name: draft.item.name.trim(), url: safeStickerUrl(draft.item.url.trim()), description: draft.item.description.trim() };
           feedback.textContent = '';
           if (!item.name) return invalid('请填写表情包名字。');
-          if (!item.url) return invalid('请填写 HTTP(S) 图片直链或选择本地图片。');
+          if (!item.url) return invalid('请先选择本地图片或粘贴图床链接。');
           if (state.settings.stickers.some((row, i) => i !== index && row.name.trim() === item.name)) return invalid('已有同名表情包，请换一个名字。');
           if (index === null && state.settings.stickers.length >= 500) return invalid('最多保存 500 个表情包。');
           const stickers = [...state.settings.stickers]; if (index === null) stickers.push(item); else stickers[index] = item;
           await commitStickers({ stickers, stickerDraft: null }); pop.close(); draw();
         }), { class: 'primary' })]);
       pop.addEventListener('close', draw, { once: true });
+      pop.addEventListener('close', () => { active = false; }, { once: true });
     };
     const inspectSticker = (index, anchor) => {
       const item = state.settings.stickers[index];
@@ -1385,7 +1534,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.6：自动补足可开关、可限制次数，手动补足每次只请求一次。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.8：支持粘贴图床批量添加表情，新增收藏多选删除、分类和标签管理；保留同答摘要修复。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {

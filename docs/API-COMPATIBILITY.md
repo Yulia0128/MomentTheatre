@@ -45,13 +45,17 @@
 | ChatCompletionService.sendRequest(data, extractData = true, signal = null) | SillyTavern core / 1.18.0 | 上述文件 ChatCompletionService.sendRequest；data.stream 为 true 时返回异步生成器工厂，false 时返回含 content 的完整对象；第二个参数是提取数据，不是流式开关 | high / 已核对官方版本源码；两种连接、两种传输的模拟请求及取消检查通过；真实 API 待验收 |
 | presetToGeneratePayload(preset, overridePreset, overridePayload) | SillyTavern core / 1.18.0 | 同文件；通过 overridePayload.stream 和 max_tokens 覆盖本次请求参数 | high / 同上 |
 
-`settings.stream` 默认 true，仅控制瞬息发出的请求，不修改酒馆主设置。独立连接直接设置 payload.stream，跟随连接通过 overridePayload 传递。非流式等待完整 content 返回后更新阅读内容，空回和取消仍走现有错误／停止流程；不暴露 reasoning。续写、补写、剧情总结及连接测试均沿用开关。最大回复token 映射到 max_tokens，剧情总结固定为 1200，连接测试为 32。
+`settings.stream` 默认 true，仅控制瞬息发出的请求，不修改酒馆主设置。独立连接直接设置 payload.stream，跟随连接通过 overridePayload 传递。非流式等待完整 content 返回后更新阅读内容，空回和取消仍走现有错误／停止流程；不暴露 reasoning。1.2.7 不再独立请求剧情总结。最大回复token 映射到 max_tokens，十节同答摘要临时加 1200、百节加 2800，最高 200000，不写回用户设置；连接测试为 32。实际模型／服务商上限仍以各连接为准。
 
 每篇首次生成保存角色、Persona、所选世界书、预设提示词及所选正文参考的快照。续写依据快照和参考章节构造 messages，不运行正文的变量脚本与世界书副作用。
 
-每篇的累计总结存于该篇 `story.summaries`，内容为 `{ through: 总结截至的节数, content: 总结文本 }`。它和 chapters 一起保存到 IndexedDB `shunxi-library` 的 `accounts` 中，按当前酒馆账号的 scope 隔离。续写取最近一份有效总结，再附上 `chapters.slice(summary.through)`；10 节总结供第 11 节使用，第 12 节追加第 11 节原文。总结和原文均进入全量 JSON 备份。设置中的提醒删除不影响这一流程。
+每篇的摘要存于 `story.summaries`。旧累计总结 `{ through, content }` 原样保留；1.2.7 新记录增加 `kind: 'segment' | 'century'` 和 `from`，对应独立十节／百节区间。摘要无 2000 字符截断（异常超过一百万字符时明确拒绝，不静默截断），和章节一起经既有数据库 3 分片事务保存、独立回读校验。续写按预算选择旧累计总结、分段摘要、大总结与近期正文，缺摘要不阻止生成。编辑或补足修改章节会使覆盖它的旧摘要失效。JSON／ZIP 备份和同步保留类型、区间、完整内容；旧快照保持原校验形状，新摘要需要同步两端均为 1.2.7。没有改变底层保存／备份／同步容器格式。
 
 当前支持：
+
+1.2.8 新增两个可选的设置字段 `storyTagCatalog`、`scriptTagCatalog`，分别保留故事／剧本的独立标签目录。旧资料缺省时不添加字段，维持原同步校验形状；显式管理或保存标签后才记录目录。完整备份与现有同步的设置合并会保留目录，但没有新增删除传播或同步墓碑，删除仅作用本机；再次合并远端资料可能带回已删内容。同步带新标签目录的资料，各端需使用 1.2.8。
+
+图床入口只解析用户粘贴的文本并用浏览器图片加载验证，保存原 HTTP(S) 链接，不调用生成 API、不上传到第三方新服务。已确认的本地上传格式与大小限制不变；图床和本地批次共用既有输入日志和资源提交，不改数据库或资源回收。
 
 - 基础人物字段和 `{{char}}`、`{{user}}`、`{{description}}`、`{{personality}}`、`{{scenario}}`、`{{persona}}`、`{{mesExamples}}` 等基础替换。
 - 世界书常驻、主关键词、四种次关键词组合、大小写／完整单词匹配、关键词正则。

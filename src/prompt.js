@@ -2,6 +2,8 @@ import { phonePrompt, parsePhoneReport, serializePhone } from './phone-format.js
 import { HTML_PROMPT } from './html-work.js';
 import { expandPrompt, macroContext } from './prompt-macros.js';
 import { shouldTrigger, promptRole, injectHistory } from './prompt-injection.js';
+import { storyMemory } from './story-memory.js';
+import { summaryInstruction } from './summary-protocol.js';
 
 const string = value => typeof value === 'string' ? value : '';
 
@@ -55,16 +57,16 @@ export function selectWorldEntries(books, corpus, snapshot, macros = macroContex
   }
   return selected.sort((a, b) => b.order - a.order);
 }
-export function buildMessages({ snapshot, prompt, mode, chapters = [], instruction = '', words = 5000, targetMessages = 50, summary = null, stickers = [], allowRetract = false, maxInputChars = 60000 }) {
+export function buildMessages({ snapshot, prompt, mode, chapters = [], instruction = '', words = 5000, targetMessages = 50, summary = null, summaries = [], summaryPlan = null, stickers = [], allowRetract = false, maxInputChars = 60000 }) {
   if (!snapshot) throw new Error('这篇番外缺少人物资料，请重新选择资料后创建。');
   const macros = macroContext();
   const c = snapshot.character || {}, u = snapshot.persona || {};
-  const reference = chapters.slice(summary?.through || 0).map(chapter => chapter.mode === 'phone' ? { ...chapter, content: serializePhone(parsePhoneReport(chapter.content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) } : chapter);
-  if (reference.length > 10) throw new Error('前文尚未完成剧情总结。');
+  const reference = chapters.map(chapter => chapter.mode === 'phone' ? { ...chapter, content: serializePhone(parsePhoneReport(chapter.content, { character: snapshot.character?.name, persona: snapshot.persona?.name }).messages) } : chapter);
+  const memory = storyMemory({ chapters: reference, summaries: summary ? [...summaries, summary] : summaries, recentCount: summaryPlan ? 9 : 2, budget: summaryPlan ? 200000 : 60000 });
   const initial = expand(prompt, snapshot, macros);
   const continuation = expand(instruction, snapshot, macros);
   const originalContext = Array.isArray(snapshot.context) ? snapshot.context : [];
-  const corpus = [initial, summary?.content || '', ...originalContext.map(m => m.content), ...reference.map(ch => ch.content), continuation].join('\n');
+  const corpus = [initial, ...originalContext.map(m => m.content), ...memory.messages.map(m => m.content), continuation].join('\n');
   const generationType = chapters.length ? 'continue' : 'normal';
   const entries = selectWorldEntries(snapshot.books, corpus, snapshot, macros, generationType);
   const before = entries.filter(e => e.position === 0).map(e => e.content).join('\n\n');
@@ -72,11 +74,8 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
   const history = [];
   for (const message of originalContext) { if (['user','assistant'].includes(message.role) && typeof message.content==='string') history.push({role:message.role,content:message.content}); }
   history.push({ role: 'user', content: `番外要求：\n${initial}` });
-  if (summary) history.push({ role: 'system', content: `截至第 ${summary.through} 节的剧情总结：\n${summary.content}` });
-  reference.forEach((chapter, i) => {
-    if (chapter.instruction) history.push({ role: 'user', content: chapter.instruction });
-    history.push({ role: 'assistant', content: chapter.content });
-  });
+  history.push(...memory.messages);
+  if (memory.clipped) macros.warnings.add('前情已按预算节选；完整正文和摘要仍保留在资料库中。');
   const blocks = {
     charDescription: expand(c.description, snapshot, macros), charPersonality: expand(c.personality, snapshot, macros), scenario: expand(c.scenario, snapshot, macros),
     personaDescription: expand(u.description, snapshot, macros), dialogueExamples: [entries.filter(e => e.position === 5).map(e => e.content).join('\n'), expand(c.mes_example, snapshot, macros), entries.filter(e => e.position === 6).map(e => e.content).join('\n')].filter(Boolean).join('\n\n'), worldInfoBefore: before, worldInfoAfter: after,
@@ -140,6 +139,7 @@ export function buildMessages({ snapshot, prompt, mode, chapters = [], instructi
     ? `根据以上番外续写第 ${chapters.length + 1} 节，不重复上文。本节${target}。${continuation ? `本次要求：${continuation}` : '请自然接续。'}\n${format}`
     : `现在生成第一节，${target}。\n${format}` });
   if (mode !== 'phone' && !chapters.some(ch => (ch.mode || 'prose') === 'prose')) messages.at(-1).content += '\n必须根据故事内容拟定一个独立标题，语气随番外氛围变化：喜剧可跳脱，酸涩或严肃故事用克制的标题。不得把用户指令当标题。' + (mode === 'html' ? '标题放在完整 HTML 的 <title> 中。' : '首行输出 <shunxi-title> 与 </shunxi-title> 这一对标签，标签内填写你实际拟定的标题，不得填占位词。换行后开始正文，正文不重复标题；标题不计入目标字数。');
+  messages.at(-1).content += summaryInstruction(summaryPlan);
   const chars = messages.reduce((n, m) => n + m.content.length, 0);
   if (chars > maxInputChars) throw new Error(`本次输入约 ${chars} 字符，超过设置的 ${maxInputChars} 字符上限。`);
   Object.defineProperty(messages, 'warnings', { value: [...macros.warnings] });

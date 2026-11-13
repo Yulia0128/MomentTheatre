@@ -2,6 +2,7 @@
 // titles, names, expressions, replacement templates, URLs or credentials.
 import { stripDefaultFilters } from './preset-regex.js';
 import { extractTitle } from './story-title.js';
+import { splitSummaryReply } from './summary-protocol.js';
 export const originalProse = chapter => chapter.sourceContent || chapter.content || '';
 export function emptyProseIssue(chapter, rendered) {
   // Be deliberately conservative: non-text HTML can render through CSS,
@@ -10,7 +11,7 @@ export function emptyProseIssue(chapter, rendered) {
   const trace = rendered.trace;
   let stage, message;
   const sourceBody = chapter.sourceContent && chapter.sourceContent !== chapter.content
-    ? extractTitle(stripDefaultFilters(chapter.sourceContent), 'prose').content.trim() : '';
+    ? extractTitle(stripDefaultFilters(splitSummaryReply(chapter.sourceContent).body), 'prose').content.trim() : '';
   if (trace.body === 0 && sourceBody) {
     stage = '章节正文与独立原文不一致';
     message = '阅读内容为空，另存的原文仍有正文。';

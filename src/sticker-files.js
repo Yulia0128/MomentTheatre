@@ -12,8 +12,9 @@ function mime(bytes) {
   if (text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP') return 'image/webp';
   return '';
 }
-async function checkImage(url) {
+export async function checkStickerImage(url) {
   const image = new Image();
+  image.referrerPolicy = 'no-referrer';
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { image.src = ''; reject(new Error('图片读取超时。')); }, 15000);
     image.onload = () => { clearTimeout(timer); resolve(); };
@@ -22,7 +23,7 @@ async function checkImage(url) {
   });
   if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth * image.naturalHeight > 40000000) throw new Error('图片尺寸过大，请先缩小后上传。');
 }
-export async function readStickerFiles(files, validateImage = checkImage) {
+export async function readStickerFiles(files, validateImage = checkStickerImage) {
   files = Array.from(files || []);
   if (!files.length || files.length > MAX_STICKER_BATCH) throw new Error('每次请选择 1～9 张表情包。');
   if (files.some(file => !file.size || file.size > MAX_STICKER_BYTES)) throw new Error('每张表情包不能超过 5 MB。');
