@@ -1534,7 +1534,7 @@ export async function mount(host, { preview = false, stylesheet = null } = {}) {
         el('div', { class: 'actions' }, button('分类导出', exportCategories), button('备份全部资料', () => action(async () => download(libraryBackup(state,store.health), `瞬息-备份-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip'))), button('恢复备份', () => restore.click(), { disabled: Boolean(task) })), restore,
         el('p', { class: 'muted' }, '请养成定期备份的习惯，重要修改前建议先备份全部资料。')),
       el('section', { class: 'settings-group' }, el('h2', {}, '云同步'), syncPanel()),
-      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.8：支持粘贴图床批量添加表情，新增收藏多选删除、分类和标签管理；保留同答摘要修复。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
+      el('section', { class: 'settings-group update-group' }, el('h2', {}, '更新'), el('p', {}, `当前版本 · ${VERSION}`), el('p', { class: 'muted' }, '1.2.9：自动读取柏宝书当前记忆；未安装或读取不可用时保持原有生成方式。'), button('检查更新', () => action(async () => { notify('正在检查更新…'); notify(await host.checkUpdate()); }))),
       el('section', { class: 'settings-group' }, el('h2', {}, '报错记录'), el('div', { class: 'error-list', 'aria-live': 'polite' }, errorRows())));
   }
   function exportCategories() {

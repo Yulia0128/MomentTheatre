@@ -292,3 +292,10 @@ autoSync 是可选的本机设置，缺失即关闭；sharedState 排除，apply
 参考：https://developer.chrome.com/blog/indexeddb-durability-mode-now-defaults-to-relaxed 与 https://www.w3.org/TR/IndexedDB/#transaction-durability 。fake-indexeddb 故障注入与 Chrome 隔离配置进程崩溃／重开已验证，均不证明 TT 真机断电、设备底层文件缺失可恢复。
 
 1.2 最终提交校验补充：集合顺序索引按版本独立保存，正文和资源继续去重；大字段映射分页。确认前也验证旧版独有记录／资源，已确认记录缺失时不悄悄从内存重建。主记录缺失但旧同步恢复记录仍在时只读回退，不视为新账号。普通保存不反复读取固定迁移档的大记录。
+# 1.2.9 柏宝书只读记忆
+
+按作者提供的《柏宝书公开读取接口（API v1）》使用同页 `globalThis.STBaiBaiBook`。每次 TavernHost.generate 调用读取 `getSnapshot()`，以其 `point.upToExclusive` 为 `getHistory({ before })` 的排他截止点；将完整快照、历史覆盖信息和 `relativeText` 加入当前模型请求。不另取已包含于 vars 的变量，不重复发送 history.text 或 nodes，不读取内部 memory／chatMetadata，不触发总结生成。
+
+仅支持 apiVersion 1 的同步公开接口；缺少、未就绪、不兼容、无聊天、返回畸形或读取／序列化抛错均静默跳过，发送原有 messages，不注入占位，不缓存旧结果、不重试读取。不依赖柏宝书记忆引擎总开关，不新增瞬息设置。coverage 缺口随参考资料保留；未知好感与态度不转成 0。
+
+主／独立连接、正文／小手机／HTML、续写／补足／失败重试共用此入口，原有聊天上下文条数和消息内容不变。记忆只在发送阶段存在，不写入 story.snapshot、备份或同步；保留一百万字符输入保护。只有原有模型请求，成功加入记忆会增加该次输入 token。真实柏宝书插件和酒馆宿主组合仍需真机验收。

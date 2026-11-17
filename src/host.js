@@ -3,6 +3,7 @@ import { clone, id } from './model.js';
 import { mountExtensionPanel } from './extension-panel.js';
 import { mountWandEntry } from './wand-entry.js';
 import { normalizeRegexRules } from './preset-regex.js';
+import { readBaiBaiMemory } from './baibai-memory.js';
 
 export function normalizeEndpoint(value) {
   let url;
@@ -219,6 +220,11 @@ export class TavernHost {
   async generate({ messages, settings, snapshot, signal, onChunk }) {
     const c = this.getContext(), Service = c.ChatCompletionService;
     if (!Service?.sendRequest || !Service?.presetToGeneratePayload) throw new Error('当前酒馆缺少 ChatCompletionService，请使用 SillyTavern 1.15.0～1.18.x。');
+    const memory = readBaiBaiMemory();
+    if (memory) {
+      messages = [memory, ...messages];
+      if (messages.reduce((size, message) => size + message.content.length, 0) > 1000000) throw new Error('请求输入超过一百万字符的保护上限。');
+    }
     let payload;
     if (settings.apiMode === 'independent') {
       if (!settings.model.trim()) throw new Error('请先在独立 API 设置中拉取并选择模型。');
